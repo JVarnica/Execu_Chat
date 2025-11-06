@@ -1,0 +1,12 @@
+<!-- app/src/main/res/values/themes.xml -->
+<resources>
+    <style name="Theme.ExecuChat" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Keep it minimal; you can style later -->
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
+        <item name="android:navigationBarColor">?attr/colorSurface</item>
+
+        <!-- If you don’t use the legacy action bar, this keeps it off -->
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+</resources>
