@@ -85,7 +85,7 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
 
         fun bind(message: Message) {
             messageText.text = message.text
-            val lp = messageContainer.layoutParams as LinearLayout.LayoutParams
+            val lp = itemView as LinearLayout
             if (message.isUser) {
                 lp.gravity = Gravity.END
                 messageContainer.setBackgroundResource(R.drawable.bg_message_user)
@@ -95,7 +95,6 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
                 messageContainer.setBackgroundResource(R.drawable.bg_message_assistant)
                 messageText.setTextColor(0xFF000000.toInt())
             }
-            messageContainer.layoutParams = lp
         }
     }
 }

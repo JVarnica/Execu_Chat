@@ -1,0 +1,47 @@
+Index: app/src/main/java/com/example/execu_chat/MainActivity.kt
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/app/src/main/java/com/example/execu_chat/MainActivity.kt b/app/src/main/java/com/example/execu_chat/MainActivity.kt
+--- a/app/src/main/java/com/example/execu_chat/MainActivity.kt
++++ b/app/src/main/java/com/example/execu_chat/MainActivity.kt	(date 1764361879437)
+@@ -455,35 +455,11 @@
+ 
+     private suspend fun loadWhisperModules(): Boolean {
+         return try {
+-            val modelPath = AssetMover.copyAssetToFiles(
+-                this@MainActivity,
+-                "model.pte"
+-            )
+-            whisperModel = Module.load(modelPath)
+-            whisperLoaded = true
+-            Log.d("ASR", "Whisper modules loaded")
+-            true
+-        } catch (t: Throwable) {
+-            Log.e("ASR", "Failed to load Whisper modules", t)
+-            false
++            JSONObject(json ?: "{}").optString("partial", "")
++        } catch (_: Throwable) {
++            ""
+         }
+     }
+-
+-    private fun startRecording() {
+-        Log.d("ASR", "startRecording() called")
+-        if (ContextCompat.checkSelfPermission(
+-                this,
+-                Manifest.permission.RECORD_AUDIO
+-            ) != PackageManager.PERMISSION_GRANTED
+-        ) {
+-            toast("No mic permission")
+-            return
+-        }
+-        val bufSize = audioBufferSize
+-        if (bufSize <= 0) {
+-            toast("AudioRecord unsupported on this device")
+-            return
+-        }
+ 
+         pcmCollector.reset()
+ 

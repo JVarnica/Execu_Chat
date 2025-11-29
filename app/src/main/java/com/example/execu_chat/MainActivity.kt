@@ -1,31 +1,38 @@
 package com.example.execu_chat
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Bundle
-import android.widget.*
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.View
-import androidx.lifecycle.lifecycleScope
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import androidx.core.view.GravityCompat
-import org.pytorch.executorch.extension.llm.LlmCallback
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
-import org.vosk.Model
-import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
-import android.util.Log
-
 import org.json.JSONObject
+import org.pytorch.executorch.EValue
+import org.pytorch.executorch.Module
+import org.pytorch.executorch.Tensor
+import org.pytorch.executorch.extension.llm.LlmCallback
 import org.pytorch.executorch.extension.llm.LlmModule
-
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity() {
 
@@ -45,25 +52,43 @@ class MainActivity : AppCompatActivity() {
     private lateinit var micBtn: ImageButton
     private lateinit var chatList: RecyclerView
 
-    @Volatile private var llmModule: LlmModule? = null
+    @Volatile
+    private var llmModule: LlmModule? = null
     private var firstMessage = false
     private var currentChatId: String? = null
 
     private lateinit var chatAdapter: ChatAdapter
-
     private val session = ChatSession()
 
-    // Vosk (inline, no backend)
-    private var voskModel: Model? = null
-    private var speechService: SpeechService? = null
-    private var sttListening = false
-    private var sttBuffer = StringBuilder()
+    // Whisper modules
+    private var whisperPreproc: Module? = null
+    private var whisperModel: Module? = null
+    private var whisperIdToToken: Map<Int, String>? = null
+    private var whisperLoaded = false
+
+    // decoder start token (set this to whatever you used in export)
+    private val decoderStartId = 50258
+
+    // Audio recording for Whisper
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = false
+    private var recordingThread: Thread? = null
+    private val audioHandler = Handler(Looper.getMainLooper())
+    private val recordDurationMs = 5000L
+
+    private val sampleRate = 16000
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+    private val audioBufferSize by lazy {
+        AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+    }
+    private val pcmCollector = ByteArrayOutputStream()
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) toggleMic()
+        if (granted) onMicClicked()
         else Toast.makeText(
             this,
             "Microphone permission required for voice input",
@@ -75,14 +100,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.main_menu)
 
-
         initializeViews()
         setupListeners()
         loadChatList()
     }
-    private fun initializeViews() {
 
-        // Drawer + UI refs
+    private fun initializeViews() {
         drawerLayout = findViewById(R.id.drawerLayout)
         loadBtn = findViewById(R.id.loadBtn)
         progress = findViewById(R.id.progress)
@@ -103,13 +126,12 @@ class MainActivity : AppCompatActivity() {
         micBtn = findViewById(R.id.micBtn)
         input = findViewById(R.id.input)
 
-        // Initially disable chat list
         chatList.isEnabled = false
         chatList.alpha = 0.5f
         chatList.layoutManager = LinearLayoutManager(this)
     }
+
     private fun setupListeners() {
-        // Drawer toggle
         menuBtn.setOnClickListener {
             drawerLayout.openDrawer(GravityCompat.START)
         }
@@ -118,52 +140,52 @@ class MainActivity : AppCompatActivity() {
             drawerLayout.closeDrawer(GravityCompat.START)
             loadModel()
         }
-        // New Chat
+
         newChatBtn.setOnClickListener {
             startNewChat()
         }
 
-        // Save chat
         saveBtn.setOnClickListener {
             saveCurrentChat()
         }
 
-        // RecyclerView for saved chats -open saved chat
         chatAdapter = ChatAdapter(
             { thread -> loadSavedChat(thread) },
             onDelete = { thread -> deleteSavedChat(thread) }
         )
         chatList.adapter = chatAdapter
 
-
         micBtn.setOnClickListener {
-            loadVoskModel()
+            onMicClicked()
         }
 
-        // Send button
         sendBtn.setOnClickListener {
             sendMessage()
         }
     }
+
+    // ---------------------- LLM LOADING / CHAT ------------------------
+
     private fun loadModel() {
         gateUi(loaded = false, busy = true)
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-
-                val modelPath = AssetMover.copyAssetToFiles(this@MainActivity, "llama1B_4w4d.pte")
-                val tokPath = AssetMover.copyAssetToFiles(this@MainActivity, "tokenizer.model")
+                val modelPath =
+                    AssetMover.copyAssetToFiles(this@MainActivity, "llama1B_4w4d.pte")
+                val tokPath =
+                    AssetMover.copyAssetToFiles(this@MainActivity, "tokenizer.model")
 
                 val module = LlmModule(
                     LlmModule.MODEL_TYPE_TEXT,
                     modelPath,
                     tokPath,
-                    0.8f  // temperature
+                    0.8f
                 )
                 val loadResult = module.load()
                 if (loadResult == 0) {
                     llmModule = module
-                    firstMessage = true //need to give full prompt with <begin_text>, so condition to call this instead of builddelta.
+                    firstMessage = true
 
                     withContext(Dispatchers.Main) {
                         toast("Model loaded successfully")
@@ -184,6 +206,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun startNewChat() {
         val module = llmModule
         if (module == null) {
@@ -205,7 +228,7 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     gateUi(loaded = true, busy = false)
                     toast("New converstation started!!")
-                    }
+                }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Failed to reset model", e)
                 withContext(Dispatchers.Main) {
@@ -215,9 +238,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun sendMessage(){
+
+    private fun sendMessage() {
         val msg = input.text.toString().trim()
-        if (msg.isEmpty() || !sendBtn.isEnabled)return
+        if (msg.isEmpty() || !sendBtn.isEnabled) return
 
         val module = llmModule
         if (module == null) {
@@ -225,7 +249,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         input.text.clear()
-        // update session + user bubble placeholder for assis response
+
         session.appendUser(msg)
         messages.add(Message(msg, isUser = true))
         messageAdapter.addItem(Message(msg, isUser = true))
@@ -234,7 +258,6 @@ class MainActivity : AppCompatActivity() {
         val assistantMsgIndex = messages.size
         messages.add(Message("", isUser = false))
         messageAdapter.addItem(Message(msg, isUser = false))
-
 
         val responseBuilder = StringBuilder()
         lifecycleScope.launch(Dispatchers.IO) {
@@ -255,21 +278,26 @@ class MainActivity : AppCompatActivity() {
                         responseBuilder.append(clean)
                         val partial = responseBuilder.toString()
                         runOnUiThread {
-                            messages[assistantMsgIndex] = Message(partial, isUser = false)
-                            messageAdapter.updateItem(assistantMsgIndex, Message(partial, isUser = false))
+                            messages[assistantMsgIndex] =
+                                Message(partial, isUser = false)
+                            messageAdapter.updateItem(
+                                assistantMsgIndex,
+                                Message(partial, isUser = false)
+                            )
                             messagesRecyclerView.scrollToPosition(assistantMsgIndex)
                         }
                     }
+
                     override fun onStats(stats: String) {
                         try {
                             val j = JSONObject(stats)
-                            var tps: Double = 0.0
-
                             val numGeneratedTokens = j.optLong("generated_tokens")
                             val inferenceEndMs = j.optLong("inference_end_ms")
                             val promptEvalEndMs = j.optLong("prompt_eval_end_ms")
-                            val decodeTime = (inferenceEndMs - promptEvalEndMs).toDouble()
-                            tps = (numGeneratedTokens.toDouble() / decodeTime) * 1000
+                            val decodeTime =
+                                (inferenceEndMs - promptEvalEndMs).toDouble()
+                            val tps =
+                                (numGeneratedTokens.toDouble() / decodeTime) * 1000
 
                             val line = buildString {
                                 append("$numGeneratedTokens tok . ")
@@ -279,14 +307,13 @@ class MainActivity : AppCompatActivity() {
                             runOnUiThread {
                                 statsText.text = line
                                 statsText.visibility = View.VISIBLE
-                                /*statsText.postDelayed({
-                                    statsText.visibility = View.GONE
-                                }, 3000)*/
                             }
                             Log.d("LLM-Stats", line)
                         } catch (t: Throwable) {
-                            Log.w("LLM-STATS", "Failed to parse stats: ${t.message}")
-
+                            Log.w(
+                                "LLM-STATS",
+                                "Failed to parse stats: ${t.message}"
+                            )
                         }
                     }
                 }
@@ -294,14 +321,18 @@ class MainActivity : AppCompatActivity() {
                 module.generate(prompt, 192, cb, false)
 
                 val finalText = responseBuilder.toString().trim()
-                Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
+                Log.d("GENERATE", "Generate returned: '$finalText'")
 
                 withContext(Dispatchers.Main) {
                     if (finalText.isNotEmpty()) {
                         session.appendAssistant(finalText)
                         Log.d("REPLY", "Final text: '$finalText'")
-                        messages[assistantMsgIndex] = Message(finalText, isUser = false)
-                        messageAdapter.updateItem(assistantMsgIndex, Message(finalText, isUser = false))
+                        messages[assistantMsgIndex] =
+                            Message(finalText, isUser = false)
+                        messageAdapter.updateItem(
+                            assistantMsgIndex,
+                            Message(finalText, isUser = false)
+                        )
                         messagesRecyclerView.scrollToPosition(assistantMsgIndex)
                     } else {
                         messages.removeAt(assistantMsgIndex)
@@ -313,7 +344,6 @@ class MainActivity : AppCompatActivity() {
                 Log.e("MainActivity", "Generation failed", e)
                 withContext(Dispatchers.Main) {
                     toast("Generation failed: ${e.message}")
-                    // Remove the empty assistant message if generation fails
                     if (messages.size > assistantMsgIndex) {
                         messages.removeAt(assistantMsgIndex)
                         messageAdapter.removeAt(assistantMsgIndex)
@@ -322,6 +352,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     private fun loadSavedChat(thread: ChatThread) {
         Log.d("MainActivity", "--Loading saved chat!!--")
         val module = llmModule
@@ -336,27 +367,29 @@ class MainActivity : AppCompatActivity() {
         val content = ChatStore.load(thread)
         session.resetFromTranscript(content)
         currentChatId = thread.id
-        // ✅ Convert transcript to message bubbles/UI
+
         messages.clear()
         for (turn in session.turns) {
-            messages.add(Message(
-                text = turn.text,
-                isUser = turn.role == Turn.Role.User
-            ))
+            messages.add(
+                Message(
+                    text = turn.text,
+                    isUser = turn.role == Turn.Role.User
+                )
+            )
         }
         messageAdapter.setItems(messages)
         messagesRecyclerView.scrollToPosition(maxOf(0, messages.size - 1))
 
         toast("Chat loaded")
         drawerLayout.closeDrawer(GravityCompat.START)
-
     }
 
     private fun loadChatList() {
         val threads = ChatStore.list(this)
         chatAdapter.submitList(threads)
     }
-    private fun saveCurrentChat(){
+
+    private fun saveCurrentChat() {
         val txt = session.fullTranscript()
         if (txt.isNotBlank()) {
             if (currentChatId != null) {
@@ -371,41 +404,8 @@ class MainActivity : AppCompatActivity() {
         }
         drawerLayout.closeDrawer(GravityCompat.START)
     }
-    private fun loadVoskModel(){
-        if (!ensureRecordPermissionOrRequest()) return
 
-        if (voskModel == null) {
-            // First time: copy directory from assets to filesDir, then load Model
-            gateUi(loaded = true, busy = true, listening = false)
-            Toast.makeText(this, "Preparing voice model…", Toast.LENGTH_SHORT).show()
-
-            lifecycleScope.launch {
-                try {
-                    // copy vosk-model-small-en-us/ from assets → filesDir
-                    val modelPath = AssetMover.copyAssetDirToFiles(
-                        context = this@MainActivity,
-                        assetDir = "vosk-model-small-en-us"
-                    )
-                    // load vosk model from filesDir
-                    val model = withContext(Dispatchers.IO) { Model(modelPath) }
-                    voskModel = model
-
-                    gateUi(loaded = true, busy = false, listening = false)
-                    toggleMic()
-                } catch (t: Throwable) {
-                    gateUi(loaded = true, busy = false, listening = false)
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Voice model error: ${t.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        } else {
-            toggleMic()
-        }
-    }
-    private fun deleteSavedChat(thread: ChatThread){
+    private fun deleteSavedChat(thread: ChatThread) {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Delete Chat")
             .setMessage("Are you sure you want to delete this chat?")
@@ -426,149 +426,336 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun toggleMic() {
-        val m = voskModel ?: return
-        if (!sttListening) {
-            try {
-                val recognizer = Recognizer(m, 16000.0f)
-                speechService = SpeechService(recognizer, 16000.0f).also {
-                    it.startListening(voskListener)
-                }
-                sttBuffer.setLength(0)
-                sttListening = true
-                input.requestFocus()
-                input.setSelection(input.text.length)
+    // ---------------------- WHISPER AUDIO / RUN-ONCE ------------------------
 
-                gateUi(loaded = true, busy = false, listening = true)
-                Toast.makeText(this, "Listening… tap mic to stop", Toast.LENGTH_SHORT).show()
-            } catch (t: Throwable) {
-                Toast.makeText(this, "Mic start failed: ${t.message}", Toast.LENGTH_LONG).show()
-                resetMicUi()
+    private fun onMicClicked() {
+        if (!ensureRecordPermissionOrRequest()) return
+
+        if (!whisperLoaded) {
+            gateUi(loaded = true, busy = true)
+            lifecycleScope.launch(Dispatchers.IO) {
+                val ok = loadWhisperModules()
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    if (ok) {
+                        toast("Whisper loaded. Recording 5s…")
+                        startRecording()
+                    } else {
+                        toast("Failed to load Whisper modules")
+                    }
+                }
             }
         } else {
-            stopListening()
-            Toast.makeText(this, "Mic off", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun stopListening() {
-        try { speechService?.stop() } catch (_: Throwable) { }
-        speechService = null
-        sttListening = false
-
-        gateUi(loaded = true, busy = false, listening = false)
-
-        input.postDelayed({
-            if (!sttListening) {
-                applyBufferToInput()
+            if (!isRecording) {
+                toast("Recording 5s…")
+                startRecording()
+            } else {
+                toast("Stopping recording…")
+                stopRecordingAndRunWhisper()
             }
-        }, 150)
-    }
-    private fun applyBufferToInput() {
-        val finalText = sttBuffer.toString().trim()
-        input.post {
-            Log.d("UI", "setText(final) -> '$finalText'")
-            input.setText(finalText)
-            input.setSelection(input.text.length )
         }
     }
 
-    private fun extractPartial(json: String?): String {
+    private suspend fun loadWhisperModules(): Boolean {
         return try {
-            JSONObject(json ?: "{}").optString("partial", "")
-        } catch (_: Throwable) {
-            ""
+            val modelPath = AssetMover.copyAssetToFiles(
+                this@MainActivity,
+                "whisper-small-fp32.pte"
+            )
+            whisperModel = Module.load(modelPath)
+            if (whisperIdToToken == null) {
+                val vocabPath = AssetMover.copyAssetToFiles(
+                    this@MainActivity,
+                    "vocab.json"  // or "whisper/vocab.json" depending on your assets tree
+                )
+                whisperIdToToken = loadWhisperVocab(vocabPath)
+            }
+            whisperLoaded = true
+
+            Log.d("ASR", "Whisper modules loaded")
+            true
+        } catch (t: Throwable) {
+            Log.e("ASR", "Failed to load Whisper modules", t)
+            false
         }
     }
 
-    private fun extractText(json: String?): String {
-        return try {
-            JSONObject(json ?: "{}").optString("text", "")
-        } catch (_: Throwable) {
-            ""
+    private fun startRecording() {
+        Log.d("ASR", "startRecording() called")
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            toast("No mic permission")
+            return
         }
-    }
-    private val voskListener = object : RecognitionListener {
+        val bufSize = audioBufferSize
+        if (bufSize <= 0) {
+            toast("AudioRecord unsupported on this device")
+            return
+        }
 
-        override fun onPartialResult(hypothesis: String?) {
-            Log.d("VOSK", "partial=$hypothesis")
-            val partial = extractPartial(hypothesis)
-            if (partial.isNotEmpty()) {
-                // live preview: sttBuffer + current partial (do not append partial into buffer)
-                val preview = buildString {
-                    append(sttBuffer.toString())
-                    if (isNotEmpty()) append(' ')
-                    append(partial)
-                }.trim()
-                input.post {
-                    input.setText(preview)
-                    input.setSelection(input.text.length)
+        pcmCollector.reset()
+
+        val ar = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            channelConfig,
+            audioFormat,
+            bufSize
+        )
+        if (ar.state != AudioRecord.STATE_INITIALIZED) {
+            toast("Failed to init audio recorder")
+            return
+        }
+
+        audioRecord = ar
+
+        isRecording = true
+        micBtn.alpha = 0.6f
+
+        ar.startRecording()
+        Log.d("ASR", "AudioRecord started, bufferSize=$bufSize")
+
+        // Background thread: read until isRecording == false
+        recordingThread = Thread {
+            Log.d("ASR", "recordingThread started")
+            val buffer = ByteArray(bufSize)
+
+            while (isRecording) {
+                val read = ar.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    synchronized(pcmCollector) {
+                        pcmCollector.write(buffer, 0, read)
+                    }
+                }
+            }
+            Log.d("ASR", "recordingThread exiting")
+        }.also { it.start() }
+
+        // Safety timeout: auto-stop after 60 seconds
+        audioHandler.postDelayed({
+            if (isRecording) {
+                Log.d("ASR", "Max record time reached (60s), auto-stopping")
+                toast("Max record time reached (60s), stopping")
+                stopRecordingAndRunWhisper()
+            }
+        }, 60_000L)
+    }
+
+    private fun stopRecordingAndRunWhisper() {
+        Log.d("ASR", "stopRecordingAndRunWhisper()")
+        if (!isRecording) {
+            Log.d("ASR", "Not recording, nothing to stop.")
+            return
+        }
+        isRecording = false
+
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {
+        }
+        audioRecord?.release()
+        audioRecord = null
+        micBtn.alpha = 1f
+
+        val audioBytes = synchronized(pcmCollector) { pcmCollector.toByteArray() }
+        if (audioBytes.isEmpty()) {
+            toast("No audio captured")
+            return
+        }
+
+        gateUi(loaded = true, busy = true)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val transcription = runWhisperOnce(audioBytes)
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    toast("Whisper transcription: $transcription")
+                    Log.d("ASR", "Transcription: $transcription")
+                }
+            } catch (t: Throwable) {
+                Log.e("ASR", "Whisper run failed", t)
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    toast("Whisper error: ${t.message}")
                 }
             }
         }
-
-        override fun onResult(hypothesis: String?) {
-            Log.d("VOSK", "onResult=$hypothesis")
-            //
-            val text = extractText(hypothesis)
-            if (text.isNotEmpty()) {
-                if (sttBuffer.isNotEmpty()) sttBuffer.append(' ')
-                sttBuffer.append(text)
-            }
-        }
-
-        override fun onFinalResult(hypothesis: String?) {
-            Log.d("VOSK", "finalres=$hypothesis")
-            val text = extractText(hypothesis)
-            if (text.isNotEmpty()) {
-                if (sttBuffer.isNotEmpty()) sttBuffer.append(' ')
-                sttBuffer.append(text)
-            }
-        }
-
-        override fun onError(e: Exception?) {
-            Log.e("VOSK", "error", e)
-            runOnUiThread {
-                Toast.makeText(this@MainActivity, "Voice error: ${e?.message}", Toast.LENGTH_LONG)
-                    .show()
-                resetMicUi()
-            }
-        }
-        override fun onTimeout() {
-            runOnUiThread { stopListening() }
-        }
     }
 
-        private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
-            loadBtn.visibility = if (loaded) View.GONE else View.VISIBLE
-            sendBtn.visibility = if (loaded) View.VISIBLE else View.GONE
-            progress.visibility = if (busy) View.VISIBLE else View.GONE
-            input.isEnabled = loaded && !busy
-            sendBtn.isEnabled = loaded && !busy
-            newChatBtn.isEnabled = !busy
-            saveBtn.isEnabled = !busy
-            micBtn.isEnabled = loaded && !busy
-            micBtn.alpha = if (listening) 0.6f else 1f
-        }
-
-        private fun ensureRecordPermissionOrRequest(): Boolean {
-            val p = Manifest.permission.RECORD_AUDIO
-            val granted = ContextCompat.checkSelfPermission(this, p) ==
-                    PackageManager.PERMISSION_GRANTED
-            return if (granted) {
-                true
+    private fun pcm16ToFloatArray(audioBytes: ByteArray): FloatArray {
+        val totalSamples = audioBytes.size / 2
+        val floatSamples = FloatArray(totalSamples)
+        val byteBuffer =
+            ByteBuffer.wrap(audioBytes).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until totalSamples) {
+            val sample = byteBuffer.short.toInt()
+            floatSamples[i] = if (sample < 0) {
+                sample / 32768.0f
             } else {
-                reqRecordAudio.launch(p)
-                false
+                sample / 32767.0f
             }
         }
-        private fun toast(msg: String) {
-            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+        return floatSamples
+    }
+    private suspend fun loadWhisperVocab(vocabPath: String): Map<Int, String> {
+
+        val jsonText = File(vocabPath).readText(Charsets.UTF_8)
+
+        val root = JSONObject(jsonText)
+
+        val map = HashMap<Int, String>(root.length())
+        val keys = root.keys()
+        while (keys.hasNext()) {
+            val token = keys.next()
+            val id = root.getInt(token)
+            map[id] = token   // id -> token (for decoding)
         }
-        private fun resetMicUi() {
-            sttListening = false
-            input.hint = ""
-            gateUi(loaded = true, busy = false, listening = false)
+        return map
+    }
+
+    private fun runWhisperOnce(pcmBytes: ByteArray): String {
+        // Only need the Whisper model, not the preprocessor anymore!
+        val model = whisperModel ?: error("Whisper model not loaded")
+
+        // Convert PCM16 to float
+        val floats = pcm16ToFloatArray(pcmBytes)
+        Log.d("ASR", "runWhisperOnce: raw samples = ${floats.size}")
+
+        // Compute mel spectrogram in pure Kotlin (no .pte needed!)
+        Log.d("ASR", "Computing mel spectrogram...")
+        val melData = WhisperMelSpectrogram.compute(floats)
+        val melShape = WhisperMelSpectrogram.getOutputShape()  // [1, 80, 3000]
+        Log.d("ASR", "Mel spectrogram computed: ${melData.size} values, shape=${melShape.contentToString()}")
+
+        // Create mel tensor [1, 80, 3000]
+        val melTensor = Tensor.fromBlob(melData, melShape)
+        // val melTensor = Tensor.fromBlob(melData, longArrayOf(1L, 80L, 3000L))
+        Log.d("ASR", "melTensor created")
+
+        // Step 1: Run ENCODER
+        Log.d("ASR", "Running encoder...")
+        val encoderOut = model.execute("encoder", EValue.from(melTensor))
+        val encoderHiddenStates = encoderOut[0].toTensor()
+        Log.d("ASR", "Encoder output shape: ${encoderHiddenStates.shape().contentToString()}")
+
+        // Whisper special tokens
+        val startOfTranscript = 50258L
+        val endOfTranscript = 50257L
+        val english = 50259L
+        val transcribe = 50359L
+        val noTimestamps = 50363L
+
+        // Build initial prompt: <|startoftranscript|><|en|><|transcribe|><|notimestamps|>
+        val generatedTokens = mutableListOf(startOfTranscript, english, transcribe, noTimestamps)
+
+        val maxTokens = 224  // Whisper's max generation length
+        var cachePos = 0L
+
+        Log.d("ASR", "Starting decoding loop...")
+
+        // Autoregressive decoding loop
+        while (generatedTokens.size < maxTokens) {
+            // Create input tensor with the last token
+            val inputToken = generatedTokens.last()
+            val decoderInputIds = Tensor.fromBlob(
+                longArrayOf(inputToken),
+                longArrayOf(1L, 1L)
+            )
+
+            val cachePosition = Tensor.fromBlob(
+                longArrayOf(cachePos),
+                longArrayOf(1L)
+            )
+
+            // Run decoder
+            val decoderOut = model.execute(
+                "text_decoder",
+                EValue.from(decoderInputIds),
+                EValue.from(encoderHiddenStates),
+                EValue.from(cachePosition)
+            )
+
+            val logits = decoderOut[0].toTensor().dataAsFloatArray
+
+            // Argmax to get next token
+            var nextToken = 0
+            var maxLogit = logits[0]
+            for (i in 1 until logits.size) {
+                if (logits[i] > maxLogit) {
+                    maxLogit = logits[i]
+                    nextToken = i
+                }
+            }
+
+            Log.d("ASR", "Position $cachePos: token $nextToken")
+
+            // Check for end of transcript
+            if (nextToken.toLong() == endOfTranscript) {
+                Log.d("ASR", "End of transcript reached")
+                break
+            }
+
+            generatedTokens.add(nextToken.toLong())
+            cachePos++
+        }
+
+        Log.d("ASR", "Generated ${generatedTokens.size} tokens")
+
+        // Decode tokens to text (skip the prompt tokens)
+        val textTokens = generatedTokens.drop(4)  // Skip <|startoftranscript|><|en|><|transcribe|><|notimestamps|>
+        val transcription = decodeTokens(textTokens)
+
+        Log.d("ASR", "Transcription: $transcription")
+
+        return transcription
+    }
+    private fun decodeTokens(tokens: List<Long>): String {
+        // Filter out special tokens (>= 50257) and decode
+        val textTokens = tokens.filter { it < 50257 }
+
+        val vocab = whisperIdToToken ?: return textTokens.joinToString(" ") { "[$it]" }
+
+        val pieces = textTokens.mapNotNull { id ->
+            vocab[id.toInt()]
+        }
+
+        return pieces.joinToString("")
+            .replace("Ġ", " ")   // space marker
+            .replace("Ċ", "\n")  // newline marker
+            .trim()
+    }
+    // ---------------------- UI HELPERS ------------------------
+
+    private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
+        loadBtn.visibility = if (loaded) View.GONE else View.VISIBLE
+        sendBtn.visibility = if (loaded) View.VISIBLE else View.GONE
+        progress.visibility = if (busy) View.VISIBLE else View.GONE
+        input.isEnabled = loaded && !busy
+        sendBtn.isEnabled = loaded && !busy
+        newChatBtn.isEnabled = !busy
+        saveBtn.isEnabled = !busy
+        micBtn.isEnabled = loaded && !busy
+        micBtn.alpha = if (listening) 0.6f else 1f
+    }
+
+    private fun ensureRecordPermissionOrRequest(): Boolean {
+        val p = Manifest.permission.RECORD_AUDIO
+        val granted = ContextCompat.checkSelfPermission(this, p) ==
+                PackageManager.PERMISSION_GRANTED
+        return if (granted) {
+            true
+        } else {
+            reqRecordAudio.launch(p)
+            false
         }
     }
 
+    private fun toast(msg: String) {
+        runOnUiThread {
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+}
