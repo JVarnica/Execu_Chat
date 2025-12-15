@@ -172,12 +172,12 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val modelPath =
-                    AssetMover.copyAssetToFiles(this@MainActivity, "llama1B_4w4d.pte")
+                    AssetMover.copyAssetToFiles(this@MainActivity, "llava_combined_xnnpack.pte")
                 val tokPath =
                     AssetMover.copyAssetToFiles(this@MainActivity, "tokenizer.model")
 
                 val module = LlmModule(
-                    LlmModule.MODEL_TYPE_TEXT,
+                    LlmModule.MODEL_TYPE_MULTIMODAL,
                     modelPath,
                     tokPath,
                     0.8f
