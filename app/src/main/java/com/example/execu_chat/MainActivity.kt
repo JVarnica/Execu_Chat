@@ -14,6 +14,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import androidx.core.view.GravityCompat
 import org.pytorch.executorch.extension.llm.LlmCallback
+import org.pytorch.executorch.extension.llm.LlmModule
+import org.pytorch.executorch.Module
+import org.pytorch.executorch.EValue
+import org.pytorch.executorch.Tensor
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
@@ -24,7 +28,7 @@ import org.vosk.android.SpeechService
 import android.util.Log
 
 import org.json.JSONObject
-import org.pytorch.executorch.extension.llm.LlmModule
+
 
 
 class MainActivity : AppCompatActivity() {
@@ -58,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var speechService: SpeechService? = null
     private var sttListening = false
     private var sttBuffer = StringBuilder()
+    private var llavaModel: Module? = null
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
@@ -538,37 +543,53 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { stopListening() }
         }
     }
+    private suspend fun loadModules(): Boolean {
+        return try {
+            val modelPath = AssetMover.copyAssetToFiles(
+                this@MainActivity,
+                "llava_combined_xnnpack.pte"
+            )
+            llavaModel = Module.load(modelPath)
 
-        private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
-            loadBtn.visibility = if (loaded) View.GONE else View.VISIBLE
-            sendBtn.visibility = if (loaded) View.VISIBLE else View.GONE
-            progress.visibility = if (busy) View.VISIBLE else View.GONE
-            input.isEnabled = loaded && !busy
-            sendBtn.isEnabled = loaded && !busy
-            newChatBtn.isEnabled = !busy
-            saveBtn.isEnabled = !busy
-            micBtn.isEnabled = loaded && !busy
-            micBtn.alpha = if (listening) 0.6f else 1f
-        }
 
-        private fun ensureRecordPermissionOrRequest(): Boolean {
-            val p = Manifest.permission.RECORD_AUDIO
-            val granted = ContextCompat.checkSelfPermission(this, p) ==
-                    PackageManager.PERMISSION_GRANTED
-            return if (granted) {
-                true
-            } else {
-                reqRecordAudio.launch(p)
-                false
-            }
-        }
-        private fun toast(msg: String) {
-            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
-        }
-        private fun resetMicUi() {
-            sttListening = false
-            input.hint = ""
-            gateUi(loaded = true, busy = false, listening = false)
+            Log.d("ASR", "Whisper modules loaded")
+            true
+        } catch (t: Throwable) {
+            Log.e("ASR", "Failed to load Whisper modules", t)
+            false
         }
     }
+
+    private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
+        loadBtn.visibility = if (loaded) View.GONE else View.VISIBLE
+        sendBtn.visibility = if (loaded) View.VISIBLE else View.GONE
+        progress.visibility = if (busy) View.VISIBLE else View.GONE
+        input.isEnabled = loaded && !busy
+        sendBtn.isEnabled = loaded && !busy
+        newChatBtn.isEnabled = !busy
+        saveBtn.isEnabled = !busy
+        micBtn.isEnabled = loaded && !busy
+        micBtn.alpha = if (listening) 0.6f else 1f
+    }
+
+    private fun ensureRecordPermissionOrRequest(): Boolean {
+        val p = Manifest.permission.RECORD_AUDIO
+        val granted = ContextCompat.checkSelfPermission(this, p) ==
+                PackageManager.PERMISSION_GRANTED
+        return if (granted) {
+            true
+        } else {
+            reqRecordAudio.launch(p)
+            false
+        }
+    }
+    private fun toast(msg: String) {
+        runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
+    }
+    private fun resetMicUi() {
+        sttListening = false
+        input.hint = ""
+        gateUi(loaded = true, busy = false, listening = false)
+    }
+}
 
