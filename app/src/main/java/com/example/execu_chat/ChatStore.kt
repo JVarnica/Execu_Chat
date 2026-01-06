@@ -7,7 +7,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
+//Agnostic just storing each transcript in a file in filesdir
 data class ChatThread(val id: String, val title: String, val preview: String, val path: String)
 
 object ChatStore {

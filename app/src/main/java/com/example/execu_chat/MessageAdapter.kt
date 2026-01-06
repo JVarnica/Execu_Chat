@@ -4,6 +4,7 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
@@ -85,7 +86,9 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
 
         fun bind(message: Message) {
             messageText.text = message.text
-            val lp = messageContainer.layoutParams as LinearLayout.LayoutParams
+            val lp = messageContainer.layoutParams as FrameLayout.LayoutParams
+            lp.gravity = if (message.isUser) Gravity.END else Gravity.START
+            messageContainer.layoutParams = lp
             if (message.isUser) {
                 lp.gravity = Gravity.END
                 messageContainer.setBackgroundResource(R.drawable.bg_message_user)
@@ -95,7 +98,6 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
                 messageContainer.setBackgroundResource(R.drawable.bg_message_assistant)
                 messageText.setTextColor(0xFF000000.toInt())
             }
-            messageContainer.layoutParams = lp
         }
     }
 }

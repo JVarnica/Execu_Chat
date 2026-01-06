@@ -2,6 +2,7 @@ package com.example.execu_chat
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.widget.*
 import android.view.View
@@ -26,9 +27,12 @@ import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import android.util.Log
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 import org.json.JSONObject
-
+import java.io.File
 
 
 class MainActivity : AppCompatActivity() {
@@ -48,10 +52,13 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var micBtn: ImageButton
     private lateinit var chatList: RecyclerView
+    private lateinit var modelSpinner: Spinner
+    private lateinit var attachBtn: ImageButton
 
     @Volatile private var llmModule: LlmModule? = null
     private var firstMessage = false
     private var currentChatId: String? = null
+    private var selectedImageUri: Uri? = null
 
     private lateinit var chatAdapter: ChatAdapter
 
@@ -62,28 +69,51 @@ class MainActivity : AppCompatActivity() {
     private var speechService: SpeechService? = null
     private var sttListening = false
     private var sttBuffer = StringBuilder()
-    private var llavaModel: Module? = null
+    //private var llavaModel: Module? = null
+
+    private var currModelConfig: ModelConfig = ModelConfigs.LLAMA3
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) toggleMic()
-        else Toast.makeText(
+        if (granted) {
+            toggleMic()
+        } else Toast.makeText(
             this,
             "Microphone permission required for voice input",
             Toast.LENGTH_SHORT
         ).show()
     }
+    private val reqPickImage = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            selectedImageUri = it
+            toast("Image Selected")
+            Log.d("Main Activity", "Image Selected: $it")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.main_menu)
-
-
+        hideSystemBars()
         initializeViews()
         setupListeners()
         loadChatList()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemBars()
+    }
+
+    private fun hideSystemBars() {
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
     private fun initializeViews() {
 
@@ -106,12 +136,16 @@ class MainActivity : AppCompatActivity() {
         sendBtn = findViewById(R.id.sendBtn)
         chatList = findViewById(R.id.chatList)
         micBtn = findViewById(R.id.micBtn)
+        attachBtn = findViewById(R.id.galleryBtn)
         input = findViewById(R.id.input)
+        modelSpinner = findViewById(R.id.modelSpinner)
 
         // Initially disable chat list
         chatList.isEnabled = false
         chatList.alpha = 0.5f
         chatList.layoutManager = LinearLayoutManager(this)
+
+        setupModelSpinner()
     }
     private fun setupListeners() {
         // Drawer toggle
@@ -122,6 +156,7 @@ class MainActivity : AppCompatActivity() {
         loadBtn.setOnClickListener {
             drawerLayout.closeDrawer(GravityCompat.START)
             loadModel()
+
         }
         // New Chat
         newChatBtn.setOnClickListener {
@@ -140,14 +175,41 @@ class MainActivity : AppCompatActivity() {
         )
         chatList.adapter = chatAdapter
 
-
         micBtn.setOnClickListener {
             loadVoskModel()
         }
-
         // Send button
         sendBtn.setOnClickListener {
             sendMessage()
+        }
+        attachBtn.setOnClickListener {
+            if (currModelConfig.modelType.isMultiModal()) {
+                reqPickImage.launch("image/*")
+            } else {
+                toast("Llama only text. Use Llava!")
+            }
+        }
+    }
+    private fun setupModelSpinner() {
+        val modelNames = ModelConfigs.ALL.map { ModelConfigs.getDisplayName(it.modelType) }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelNames)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        modelSpinner.adapter = adapter
+
+        val defaultIndex = ModelConfigs.ALL.indexOfFirst { it.modelType == ModelType.LLAMA_3 }
+        if (defaultIndex >= 0) {
+            modelSpinner.setSelection(defaultIndex)
+        }
+        modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                currModelConfig = ModelConfigs.ALL[position]
+                Log.d("MainActivity", "Model selected: ${ModelConfigs.getDisplayName(currModelConfig.modelType)}")
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                // Keep current selection
+                Log.d("MainActivity", "Spinner selection cleared, keeping: ${ModelConfigs.getDisplayName(currModelConfig.modelType)}")
+            }
         }
     }
     private fun loadModel() {
@@ -155,21 +217,47 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                val modelsDir = AssetMover.getModelsDirectory(this@MainActivity)
 
-                val modelPath = AssetMover.copyAssetToFiles(this@MainActivity, "llama1B_4w4d.pte")
-                val tokPath = AssetMover.copyAssetToFiles(this@MainActivity, "tokenizer.model")
+                //check if in external storage
+                if (!AssetMover.modelExists(this@MainActivity, currModelConfig.modelFileName)) {
+                    withContext(Dispatchers.Main) {
+                        toast("Copying ${currModelConfig.modelFileName} from assets")
+                    }
+                    AssetMover.copyAssetToModelsDir(this@MainActivity, currModelConfig.modelFileName)
+                }
+                if (!AssetMover.modelExists(this@MainActivity, currModelConfig.tokenizerFileName)) {
+                    withContext(Dispatchers.Main) {
+                        toast("Copying tokenizer from assets...")
+                    }
+                    AssetMover.copyAssetToModelsDir(this@MainActivity, currModelConfig.tokenizerFileName)
+                }
 
+                val modelPath = File(modelsDir, currModelConfig.modelFileName).absolutePath
+                val tokenizerPath = File(modelsDir, currModelConfig.tokenizerFileName).absolutePath
+
+                // Verify files exist before loading
+                if (!File(modelPath).exists()) {
+                    throw Exception("Model file not found: ${currModelConfig.modelFileName}")
+                }
+                if (!File(tokenizerPath).exists()) {
+                    throw Exception("Tokenizer file not found: ${currModelConfig.tokenizerFileName}")
+                }
+                withContext(Dispatchers.Main) {
+                    toast("Loading ${ModelConfigs.getDisplayName(currModelConfig.modelType)}...")
+                }
                 val module = LlmModule(
-                    LlmModule.MODEL_TYPE_TEXT,
+                    currModelConfig.modelType.getModelType(),
                     modelPath,
-                    tokPath,
-                    0.8f  // temperature
+                    tokenizerPath,
+                    currModelConfig.temperature// temperature
                 )
                 val loadResult = module.load()
                 if (loadResult == 0) {
                     llmModule = module
                     firstMessage = true //need to give full prompt with <begin_text>, so condition to call this instead of builddelta.
 
+                    System.gc()
                     withContext(Dispatchers.Main) {
                         toast("Model loaded successfully")
                         gateUi(loaded = true, busy = false)
@@ -205,7 +293,7 @@ class MainActivity : AppCompatActivity() {
         gateUi(loaded = false, busy = true)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                llmModule?.resetContext()
+                llmModule?.resetNative()
                 firstMessage = true
                 withContext(Dispatchers.Main) {
                     gateUi(loaded = true, busy = false)
@@ -229,6 +317,10 @@ class MainActivity : AppCompatActivity() {
             toast("Please load model first!!!")
             return
         }
+        //Check if vision
+        val isVisionModel = currModelConfig.modelType.isMultiModal()
+        val hasImage = selectedImageUri != null
+
         input.text.clear()
         // update session + user bubble placeholder for assis response
         session.appendUser(msg)
@@ -244,9 +336,40 @@ class MainActivity : AppCompatActivity() {
         val responseBuilder = StringBuilder()
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                //Handle both image and non-image pipeline
+                if (isVisionModel && hasImage) {
+                    withContext(Dispatchers.Main) {
+                        toast("Processing Image...")
+                    }
+                    val imageUri = selectedImageUri!!
+                    val etImage = ETImage(contentResolver, imageUri, 224)
+                    val presetPrompt = ChatFormatter.getLlavaPresetPrompt() + " USER: "
+                    module.prefillPrompt(presetPrompt)
+                    Log.d("MainActivity", "Prefilled LLaVA preset prompt")
+
+                    System.gc()
+                    // prefill
+                    module.prefillImages(
+                        etImage.ints,
+                        etImage.width,
+                        etImage.height,
+                        3
+                    )
+                    selectedImageUri = null
+                    Log.d("MainActivity", "Image prefilled for ${currModelConfig.modelType}")
+                }
                 val prompt = if (firstMessage) {
-                    firstMessage = false
-                    session.fullPrompt()
+                    if (isVisionModel && hasImage) {
+                        firstMessage = false
+                        "$msg ASSISTANT:"
+                    } else if (isVisionModel){
+                        firstMessage = false
+                        ChatFormatter.getLlavaFirstTurnUserPrompt().replace("USER:", "USER: $msg")
+                    }
+                    else {
+                        firstMessage = false
+                        session.fullPrompt()
+                    }
                 } else {
                     ChatFormatter.buildDeltaFromUser(msg)
                 }
@@ -296,7 +419,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 Log.d("SEND", "Calling generate with continuous prompt")
-                module.generate(prompt, 192, cb, false)
+                module.generate(prompt, 512, cb, false)
 
                 val finalText = responseBuilder.toString().trim()
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
@@ -336,12 +459,11 @@ class MainActivity : AppCompatActivity() {
             drawerLayout.closeDrawer(GravityCompat.START)
             return
         }
-        llmModule?.resetContext()
-        firstMessage = true
+        //firstMessage = true no more as prefill
         val content = ChatStore.load(thread)
         session.resetFromTranscript(content)
         currentChatId = thread.id
-        // ✅ Convert transcript to message bubbles/UI
+        // transcript to message bubbles/UI
         messages.clear()
         for (turn in session.turns) {
             messages.add(Message(
@@ -354,6 +476,14 @@ class MainActivity : AppCompatActivity() {
 
         toast("Chat loaded")
         drawerLayout.closeDrawer(GravityCompat.START)
+        /*
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                module.resetNative() // clear state
+
+
+            }
+        }*/
 
     }
 
@@ -541,22 +671,6 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onTimeout() {
             runOnUiThread { stopListening() }
-        }
-    }
-    private suspend fun loadModules(): Boolean {
-        return try {
-            val modelPath = AssetMover.copyAssetToFiles(
-                this@MainActivity,
-                "llava_combined_xnnpack.pte"
-            )
-            llavaModel = Module.load(modelPath)
-
-
-            Log.d("ASR", "Whisper modules loaded")
-            true
-        } catch (t: Throwable) {
-            Log.e("ASR", "Failed to load Whisper modules", t)
-            false
         }
     }
 

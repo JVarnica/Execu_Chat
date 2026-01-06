@@ -5,8 +5,10 @@
     <string name="input_text">Message ExecuChat…</string>
     <string name="send_button">Send</string>
     <string name="voice_input">Voice!!</string>
+    <string name="select_model">Select Model</string>
     <string name="Load_button">Load</string>
     <string name="newChat_button">New Chat</string>
+    <string name="image_input">Select Image</string>
     <string name="save_button">Save</string>
     <string name="recChats_button">Recent Chats!!</string>
     <string name="delChat_button">Delete Chat</string>

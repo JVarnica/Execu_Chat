@@ -37,7 +37,7 @@ object ChatFormatter {
             append("<|start_header_id|>assistant<|end_header_id|>\n\n")
         }
     }
-    fun buildFullPrompt(turns: List<Turn>): String {//not used currently just for logging.
+    fun buildFullPrompt(turns: List<Turn>): String {
         val sb = StringBuilder()
         sb.append("<|begin_of_text|>")
 
@@ -75,6 +75,7 @@ object ChatFormatter {
 
     /** Remove control tokens and tidy whitespace, chunk-safe. */
     fun sanitizeChunk(raw: String): String {
+        //p
         var s = raw
         // strip known special tokens
         s = s.replace("<\\|begin_of_text\\|>".toRegex(), "")
@@ -92,6 +93,29 @@ object ChatFormatter {
             .replace(" +".toRegex(), " ")
             .replace("\\n{3,}".toRegex(), "\n\n")
         return s
+    }
+    // Prefill prompts (used once during model load)
+    fun getLlavaPresetPrompt(): String {
+        return "A chat between a curious human and an artificial intelligence assistant. " +
+                "The assistant gives helpful, detailed, and polite answers to the human's questions."
+    }
+
+    fun getQwenPresetPrompt(): String {
+        return "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
+    }
+
+    // First turn prompts (used for the actual first message)
+    fun getLlavaFirstTurnUserPrompt(): String {
+        return "USER: ASSISTANT:"
+    }
+
+    fun getQwenFirstTurnUserPrompt(): String {
+        return "<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n"
+    }
+
+    // Check if model needs prefill
+    fun needsPrefill(modelType: ModelType): Boolean {
+        return modelType == ModelType.LLAVA
     }
 
 }
