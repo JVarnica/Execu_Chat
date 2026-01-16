@@ -113,10 +113,6 @@ object ChatFormatter {
         return "<|im_start|>user\n<|im_end|>\n<|im_start|>assistant\n"
     }
 
-    // Check if model needs prefill
-    fun needsPrefill(modelType: ModelType): Boolean {
-        return modelType == ModelType.LLAVA
-    }
 
 }
 

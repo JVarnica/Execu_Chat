@@ -33,6 +33,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 
 import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 
 
 class MainActivity : AppCompatActivity() {
@@ -57,6 +58,8 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile private var llmModule: LlmModule? = null
     private var firstMessage = false
+    private var modelLoaded = false
+    private var needsPrefill = true
     private var currentChatId: String? = null
     private var selectedImageUri: Uri? = null
 
@@ -155,8 +158,11 @@ class MainActivity : AppCompatActivity() {
 
         loadBtn.setOnClickListener {
             drawerLayout.closeDrawer(GravityCompat.START)
-            loadModel()
-
+            if (!modelLoaded) {
+                loadModel()
+            } else {
+                unloadModel()
+            }
         }
         // New Chat
         newChatBtn.setOnClickListener {
@@ -191,7 +197,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun setupModelSpinner() {
-        val modelNames = ModelConfigs.ALL.map { ModelConfigs.getDisplayName(it.modelType) }
+        val modelNames = ModelConfigs.ALL.map { it.displayName }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelNames)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         modelSpinner.adapter = adapter
@@ -203,12 +209,12 @@ class MainActivity : AppCompatActivity() {
         modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 currModelConfig = ModelConfigs.ALL[position]
-                Log.d("MainActivity", "Model selected: ${ModelConfigs.getDisplayName(currModelConfig.modelType)}")
+                Log.d("MainActivity", "Model selected: ${currModelConfig.displayName}")
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {
                 // Keep current selection
-                Log.d("MainActivity", "Spinner selection cleared, keeping: ${ModelConfigs.getDisplayName(currModelConfig.modelType)}")
+                Log.d("MainActivity", "Spinner selection cleared, keeping: ${currModelConfig.displayName}")
             }
         }
     }
@@ -244,7 +250,7 @@ class MainActivity : AppCompatActivity() {
                     throw Exception("Tokenizer file not found: ${currModelConfig.tokenizerFileName}")
                 }
                 withContext(Dispatchers.Main) {
-                    toast("Loading ${ModelConfigs.getDisplayName(currModelConfig.modelType)}...")
+                    toast("Loading ${currModelConfig.displayName}...")
                 }
                 val module = LlmModule(
                     currModelConfig.modelType.getModelType(),
@@ -255,11 +261,11 @@ class MainActivity : AppCompatActivity() {
                 val loadResult = module.load()
                 if (loadResult == 0) {
                     llmModule = module
-                    firstMessage = true //need to give full prompt with <begin_text>, so condition to call this instead of builddelta.
+                    needsPrefill = true
 
-                    System.gc()
                     withContext(Dispatchers.Main) {
                         toast("Model loaded successfully")
+                        modelLoaded = true
                         gateUi(loaded = true, busy = false)
                         chatList.isEnabled = true
                         chatList.alpha = 1f
@@ -277,13 +283,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private fun unloadModel() {
+        gateUi(loaded = true, busy = false)
+        val module = llmModule
+        if (module == null) {
+            toast("Please load model first!!!")
+            return
+        }
+        try {
+            lifecycleScope.launch(Dispatchers.IO) {
+                module.resetNative()
+            }
+        } finally {
+            toast("Model Unloaded!!")
+            Log.d("MainActivity", "--Model Unloaded!!--")
+            modelLoaded = false
+            gateUi(loaded = false, busy = false)
+        }
+    }
     private fun startNewChat() {
         val module = llmModule
         if (module == null) {
             toast("Please load model first!!!")
             return
         }
-        Log.d("MainActivity", "--New chat started!!--")
+
         session.clear()
         messages.clear()
         messageAdapter.setItems(messages)
@@ -293,11 +317,13 @@ class MainActivity : AppCompatActivity() {
         gateUi(loaded = false, busy = true)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                llmModule?.resetNative()
-                firstMessage = true
+                module.resetContext()
+                module.prefillPrompt("<|begin_of_text|>")
+                needsPrefill = false
                 withContext(Dispatchers.Main) {
                     gateUi(loaded = true, busy = false)
                     toast("New converstation started!!")
+                    Log.d("MainActivity", "--New chat started!!--")
                     }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Failed to reset model", e)
@@ -330,7 +356,7 @@ class MainActivity : AppCompatActivity() {
 
         val assistantMsgIndex = messages.size
         messages.add(Message("", isUser = false))
-        messageAdapter.addItem(Message(msg, isUser = false))
+        messageAdapter.addItem(Message("", isUser = false))
 
 
         val responseBuilder = StringBuilder()
@@ -346,8 +372,6 @@ class MainActivity : AppCompatActivity() {
                     val presetPrompt = ChatFormatter.getLlavaPresetPrompt() + " USER: "
                     module.prefillPrompt(presetPrompt)
                     Log.d("MainActivity", "Prefilled LLaVA preset prompt")
-
-                    System.gc()
                     // prefill
                     module.prefillImages(
                         etImage.ints,
@@ -358,20 +382,21 @@ class MainActivity : AppCompatActivity() {
                     selectedImageUri = null
                     Log.d("MainActivity", "Image prefilled for ${currModelConfig.modelType}")
                 }
-                val prompt = if (firstMessage) {
-                    if (isVisionModel && hasImage) {
-                        firstMessage = false
-                        "$msg ASSISTANT:"
-                    } else if (isVisionModel){
-                        firstMessage = false
+                val prompt = when {
+                    isVisionModel && hasImage -> {
+                        needsPrefill = false
+                        "USER: $msg ASSISTANT:"
+                    }
+
+                    isVisionModel && needsPrefill -> {
+                        needsPrefill = false
                         ChatFormatter.getLlavaFirstTurnUserPrompt().replace("USER:", "USER: $msg")
                     }
-                    else {
-                        firstMessage = false
-                        session.fullPrompt()
+
+                    else -> {
+                        needsPrefill = false
+                        ChatFormatter.buildDeltaFromUser(msg)
                     }
-                } else {
-                    ChatFormatter.buildDeltaFromUser(msg)
                 }
                 Log.d("PROMPT", "Sending prompt:\n$prompt")
                 Log.d("PROMPT", "Full session:\n${session.fullPrompt()}")
@@ -384,10 +409,14 @@ class MainActivity : AppCompatActivity() {
                         val partial = responseBuilder.toString()
                         runOnUiThread {
                             messages[assistantMsgIndex] = Message(partial, isUser = false)
-                            messageAdapter.updateItem(assistantMsgIndex, Message(partial, isUser = false))
+                            messageAdapter.updateItem(
+                                assistantMsgIndex,
+                                Message(partial, isUser = false)
+                            )
                             messagesRecyclerView.scrollToPosition(assistantMsgIndex)
                         }
                     }
+
                     override fun onStats(stats: String) {
                         try {
                             val j = JSONObject(stats)
@@ -414,12 +443,11 @@ class MainActivity : AppCompatActivity() {
                             Log.d("LLM-Stats", line)
                         } catch (t: Throwable) {
                             Log.w("LLM-STATS", "Failed to parse stats: ${t.message}")
-
                         }
                     }
                 }
                 Log.d("SEND", "Calling generate with continuous prompt")
-                module.generate(prompt, 512, cb, false)
+                module.generate(prompt, 512.toInt(), cb, false)
 
                 val finalText = responseBuilder.toString().trim()
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
@@ -437,17 +465,17 @@ class MainActivity : AppCompatActivity() {
                         toast("No response generated")
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Generation failed", e)
-                withContext(Dispatchers.Main) {
-                    toast("Generation failed: ${e.message}")
-                    // Remove the empty assistant message if generation fails
-                    if (messages.size > assistantMsgIndex) {
-                        messages.removeAt(assistantMsgIndex)
-                        messageAdapter.removeAt(assistantMsgIndex)
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Generation failed", e)
+                    withContext(Dispatchers.Main) {
+                        toast("Generation failed: ${e.message}")
+                        // Remove the empty assistant message if generation fails
+                        if (messages.size > assistantMsgIndex) {
+                            messages.removeAt(assistantMsgIndex)
+                            messageAdapter.removeAt(assistantMsgIndex)
+                        }
                     }
                 }
-            }
         }
     }
     private fun loadSavedChat(thread: ChatThread) {
@@ -459,7 +487,6 @@ class MainActivity : AppCompatActivity() {
             drawerLayout.closeDrawer(GravityCompat.START)
             return
         }
-        //firstMessage = true no more as prefill
         val content = ChatStore.load(thread)
         session.resetFromTranscript(content)
         currentChatId = thread.id
@@ -476,17 +503,22 @@ class MainActivity : AppCompatActivity() {
 
         toast("Chat loaded")
         drawerLayout.closeDrawer(GravityCompat.START)
-        /*
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                module.resetNative() // clear state
-
-
+                module.resetContext()
+                module.prefillPrompt(session.fullPrompt())
+                needsPrefill = false
+                withContext(Dispatchers.Main) {
+                    toast("Chat loaded successfully")
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Prefill failed", e)
+                withContext(Dispatchers.Main) {
+                    toast("Prefill failed: ${e.message}")
+                }
             }
-        }*/
-
-    }
-
+        }
+        }
     private fun loadChatList() {
         val threads = ChatStore.list(this)
         chatAdapter.submitList(threads)
@@ -675,8 +707,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
-        loadBtn.visibility = if (loaded) View.GONE else View.VISIBLE
-        sendBtn.visibility = if (loaded) View.VISIBLE else View.GONE
+        loadBtn.visibility = View.VISIBLE
+        loadBtn.text = if (loaded) "Unload" else "Load"
+        loadBtn.isEnabled = !busy
+        sendBtn.visibility = View.VISIBLE
         progress.visibility = if (busy) View.VISIBLE else View.GONE
         input.isEnabled = loaded && !busy
         sendBtn.isEnabled = loaded && !busy
