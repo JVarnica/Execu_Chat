@@ -17,31 +17,30 @@ object ModelConfigs {
         displayName = "llava_small"
     )
     val LLAVA = ModelConfig(
-
         modelType = ModelType.LLAVA,
         modelFileName = "llava.pte",
-        tokenizerFileName = "tokenizer.json",
+        tokenizerFileName = "llava_tokenizer.model",
         displayName = "llava"
     )
     val LLAMA_S = ModelConfig(
         modelType = ModelType.LLAMA_3,
         modelFileName = "llama1B_4w4d.pte",
-        tokenizerFileName = "tokenizer.model",
+        tokenizerFileName = "llama_tokenizer.json",
         displayName = "llama_1B"
     )
 
     val LLAMA3 = ModelConfig(
         modelType = ModelType.LLAMA_3,
         modelFileName = "Llama3.2-3B-QLORA_8da4w.pte",
-        tokenizerFileName = "tokenizer.model",
+        tokenizerFileName = "llama_tokenizer.json",
         displayName = "llama_3B"
     )
 
     val QWEN = ModelConfig(
         modelType = ModelType.QWEN_3,
-        modelFileName = "qwen_vl.pte",
-        tokenizerFileName = "qwen_tokenizer.model",
-        displayName = "qwen1.5B"
+        modelFileName = "qwen3_4b_xnnpack.pte",
+        tokenizerFileName = "qwen_tokenizer.json",
+        displayName = "qwen3_4b"
     )
 
     val ALL = listOf(LLAVA, LLAVA_B, LLAMA3, LLAMA_S, QWEN)

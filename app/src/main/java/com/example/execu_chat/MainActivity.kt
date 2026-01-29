@@ -34,6 +34,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 
 class MainActivity : AppCompatActivity() {
@@ -55,9 +57,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chatList: RecyclerView
     private lateinit var modelSpinner: Spinner
     private lateinit var attachBtn: ImageButton
+    private lateinit var backendSpinner: Spinner
+    private var selectedBackend: BackendType = BackendType.XNNPACK
 
     @Volatile private var llmModule: LlmModule? = null
-    private var firstMessage = false
+    @Volatile private var lastUiUpdateMs = 0L
+    private var shouldAddSysPrompt = true
     private var modelLoaded = false
     private var needsPrefill = true
     private var currentChatId: String? = null
@@ -65,7 +70,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var chatAdapter: ChatAdapter
 
-    private val session = ChatSession()
+    private lateinit var session: ChatSession
 
     // Vosk (inline, no backend)
     private var voskModel: Model? = null
@@ -74,7 +79,9 @@ class MainActivity : AppCompatActivity() {
     private var sttBuffer = StringBuilder()
     //private var llavaModel: Module? = null
 
-    private var currModelConfig: ModelConfig = ModelConfigs.LLAMA3
+    private var currModelConfig: ModelConfig = ModelConfigs.ALL.first { it.modelType == ModelType.LLAMA_3 }
+
+    private val executor: Executor = Executors.newSingleThreadExecutor()
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
@@ -93,8 +100,9 @@ class MainActivity : AppCompatActivity() {
     ) { uri: Uri? ->
         uri?.let {
             selectedImageUri = it
-            toast("Image Selected")
             Log.d("Main Activity", "Image Selected: $it")
+            prefillImage()
+
         }
     }
 
@@ -106,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         initializeViews()
         setupListeners()
         loadChatList()
+        session = ChatSession(currModelConfig.modelType)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -141,6 +150,7 @@ class MainActivity : AppCompatActivity() {
         micBtn = findViewById(R.id.micBtn)
         attachBtn = findViewById(R.id.galleryBtn)
         input = findViewById(R.id.input)
+        backendSpinner = findViewById(R.id.backendSpinner)
         modelSpinner = findViewById(R.id.modelSpinner)
 
         // Initially disable chat list
@@ -148,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         chatList.alpha = 0.5f
         chatList.layoutManager = LinearLayoutManager(this)
 
+        setupBackendSpinner()
         setupModelSpinner()
     }
     private fun setupListeners() {
@@ -188,11 +199,51 @@ class MainActivity : AppCompatActivity() {
         sendBtn.setOnClickListener {
             sendMessage()
         }
+
         attachBtn.setOnClickListener {
             if (currModelConfig.modelType.isMultiModal()) {
                 reqPickImage.launch("image/*")
             } else {
                 toast("Llama only text. Use Llava!")
+            }
+        }
+    }
+    private fun setupBackendSpinner() {
+        val backendNames = listOf(
+            BackendType.getDisplayName(BackendType.XNNPACK),
+            BackendType.getDisplayName(BackendType.VULKAN),
+        )
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, backendNames)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        backendSpinner.adapter = adapter
+
+        backendSpinner.setSelection(0)
+        backendSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: AdapterView<*>?,
+                view: View?,
+                position: Int,
+                id: Long
+            ) {
+                val previousBackend = selectedBackend
+                selectedBackend = when (position) {
+                    0 -> BackendType.XNNPACK
+                    1 -> BackendType.VULKAN
+                    else -> BackendType.XNNPACK
+                }
+
+                // If backend changed and model is loaded, warn user
+                if (previousBackend != selectedBackend && llmModule != null) {
+                    toast("Backend changed. Please reload the model.")
+                    // Optionally unload the current model
+                    llmModule = null
+                    gateUi(loaded = false, busy = false)
+                }
+
+                Log.d("MainActivity", "Backend selected: ${BackendType.getDisplayName(selectedBackend)}")
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {
+                // Keep current selection
             }
         }
     }
@@ -209,6 +260,7 @@ class MainActivity : AppCompatActivity() {
         modelSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 currModelConfig = ModelConfigs.ALL[position]
+                session = ChatSession(currModelConfig.modelType)
                 Log.d("MainActivity", "Model selected: ${currModelConfig.displayName}")
             }
 
@@ -224,24 +276,35 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val modelsDir = AssetMover.getModelsDirectory(this@MainActivity)
+                val modelPath = File(modelsDir, currModelConfig.modelFileName).absolutePath
+                val tokenizerPath = File(modelsDir, currModelConfig.tokenizerFileName).absolutePath
+
 
                 //check if in external storage
-                if (!AssetMover.modelExists(this@MainActivity, currModelConfig.modelFileName)) {
+                if (!File(modelPath).exists()) {
                     withContext(Dispatchers.Main) {
                         toast("Copying ${currModelConfig.modelFileName} from assets")
                     }
-                    AssetMover.copyAssetToModelsDir(this@MainActivity, currModelConfig.modelFileName)
+                    try {
+                        AssetMover.copyAssetToModelsDir(
+                            this@MainActivity,
+                            currModelConfig.modelFileName
+                        )
+                        Log.d("MainActivity", "✓ Model copied from assets")
+                    }catch (e: Exception) {
+                        Log.d("MainActivity", "Can't copy model $modelPath ")
+                    }
+                } else {
+                    Log.d("MainActivity", "Model already exists: $modelPath")
                 }
-                if (!AssetMover.modelExists(this@MainActivity, currModelConfig.tokenizerFileName)) {
+                if (!File(tokenizerPath).exists()) {
                     withContext(Dispatchers.Main) {
                         toast("Copying tokenizer from assets...")
                     }
                     AssetMover.copyAssetToModelsDir(this@MainActivity, currModelConfig.tokenizerFileName)
+                } else {
+                    Log.d("MainActivity", "Tokenizer already exists: $tokenizerPath")
                 }
-
-                val modelPath = File(modelsDir, currModelConfig.modelFileName).absolutePath
-                val tokenizerPath = File(modelsDir, currModelConfig.tokenizerFileName).absolutePath
-
                 // Verify files exist before loading
                 if (!File(modelPath).exists()) {
                     throw Exception("Model file not found: ${currModelConfig.modelFileName}")
@@ -249,6 +312,9 @@ class MainActivity : AppCompatActivity() {
                 if (!File(tokenizerPath).exists()) {
                     throw Exception("Tokenizer file not found: ${currModelConfig.tokenizerFileName}")
                 }
+                Log.d("MainActivity", "Loading model: ${File(modelPath).length() / (1024*1024)}MB")
+                Log.d("MainActivity", "Loading tokenizer: ${File(tokenizerPath).length() / 1024}KB")
+
                 withContext(Dispatchers.Main) {
                     toast("Loading ${currModelConfig.displayName}...")
                 }
@@ -259,21 +325,25 @@ class MainActivity : AppCompatActivity() {
                     currModelConfig.temperature// temperature
                 )
                 val loadResult = module.load()
-                if (loadResult == 0) {
-                    llmModule = module
-                    needsPrefill = true
+                if (loadResult != 0) throw Exception("Model load failed with code: $loadResult")
 
-                    withContext(Dispatchers.Main) {
-                        toast("Model loaded successfully")
-                        modelLoaded = true
-                        gateUi(loaded = true, busy = false)
-                        chatList.isEnabled = true
-                        chatList.alpha = 1f
-                    }
+                if (currModelConfig.modelType == ModelType.LLAVA) {
+                    val presetPrompt = ChatFormatter.getLlavaPresetPrompt()
+                    module.prefillPrompt(presetPrompt)
+                    Log.d("MainActivity", "Prefilled LLaVA preset prompt")
+                    needsPrefill = false
                 } else {
-                    throw Exception("Model load failed with code: $loadResult")
+                    needsPrefill = true
                 }
+                llmModule = module
 
+                withContext(Dispatchers.Main) {
+                    toast("Model loaded successfully")
+                    modelLoaded = true
+                    gateUi(loaded = true, busy = false)
+                    chatList.isEnabled = true
+                    chatList.alpha = 1f
+                }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Model load failed", e)
                 withContext(Dispatchers.Main) {
@@ -334,9 +404,38 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun sendMessage(){
+    private fun prefillImage() {
+        toast("Processing Image...")
+        val imageUri = selectedImageUri!!
+        gateUi(loaded = true, busy = true)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val etImage = ETImage(contentResolver, imageUri, 336)
+
+                // prefill
+                llmModule?.prefillImages(
+                    etImage.getInts(), //llava uses ints
+                    etImage.width,
+                    etImage.height,
+                    3
+                )
+                selectedImageUri = null
+                Log.d("MainActivity", "Image prefilled for ${currModelConfig.modelType}")
+                withContext(Dispatchers.Main) {
+                    toast("Processing Image!!")
+                    gateUi(loaded = true, busy = false)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    toast("Image prefill failed: ${e.message}")
+                    gateUi(loaded = true, busy = false)
+                }
+            }
+        }
+    }
+    private fun sendMessage() {
         val msg = input.text.toString().trim()
-        if (msg.isEmpty() || !sendBtn.isEnabled)return
+        if (msg.isEmpty() || !sendBtn.isEnabled) return
 
         val module = llmModule
         if (module == null) {
@@ -344,71 +443,74 @@ class MainActivity : AppCompatActivity() {
             return
         }
         //Check if vision
-        val isVisionModel = currModelConfig.modelType.isMultiModal()
+        val modelType = currModelConfig.modelType
         val hasImage = selectedImageUri != null
+
+        val prompt = when {
+            modelType == ModelType.LLAVA && hasImage -> {
+                needsPrefill = false
+                "$msg ASSISTANT:"
+            }
+
+            modelType == ModelType.LLAVA && needsPrefill -> {
+                needsPrefill = false
+                shouldAddSysPrompt = false
+                ChatFormatter.getLlavaFirstTurnUserPrompt().replace(ChatFormatter.USER_PLACEHOLDER, msg.trim())
+            }
+            else -> {
+                val sysPrompt = if (shouldAddSysPrompt) {
+                    toast("Adding system prompt!")
+                    ChatFormatter.buildSystemPrompt(
+                        modelType,
+                        "You are a helpful assistant, be concise"
+                    )
+                } else {
+                    ""
+                }
+                shouldAddSysPrompt = false
+                needsPrefill = false
+                sysPrompt + ChatFormatter.buildDeltaFromUser(modelType, msg)
+            }
+        }
 
         input.text.clear()
         // update session + user bubble placeholder for assis response
         session.appendUser(msg)
-        messages.add(Message(msg, isUser = true))
+        //messages.add(Message(msg, isUser = true))
         messageAdapter.addItem(Message(msg, isUser = true))
-        messagesRecyclerView.scrollToPosition(messages.size - 1)
 
-        val assistantMsgIndex = messages.size
-        messages.add(Message("", isUser = false))
-        messageAdapter.addItem(Message("", isUser = false))
 
+        val assistantMsgIndex = messageAdapter.addItemAndReturnIndex(Message("", isUser = false))
+        messagesRecyclerView.scrollToPosition(assistantMsgIndex)
 
         val responseBuilder = StringBuilder()
+        gateUi(loaded = true, busy = true)
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 //Handle both image and non-image pipeline
-                if (isVisionModel && hasImage) {
-                    withContext(Dispatchers.Main) {
-                        toast("Processing Image...")
-                    }
-                    val imageUri = selectedImageUri!!
-                    val etImage = ETImage(contentResolver, imageUri, 224)
-                    val presetPrompt = ChatFormatter.getLlavaPresetPrompt() + " USER: "
-                    module.prefillPrompt(presetPrompt)
-                    Log.d("MainActivity", "Prefilled LLaVA preset prompt")
-                    // prefill
-                    module.prefillImages(
-                        etImage.ints,
-                        etImage.width,
-                        etImage.height,
-                        3
-                    )
-                    selectedImageUri = null
-                    Log.d("MainActivity", "Image prefilled for ${currModelConfig.modelType}")
-                }
-                val prompt = when {
-                    isVisionModel && hasImage -> {
-                        needsPrefill = false
-                        "USER: $msg ASSISTANT:"
-                    }
 
-                    isVisionModel && needsPrefill -> {
-                        needsPrefill = false
-                        ChatFormatter.getLlavaFirstTurnUserPrompt().replace("USER:", "USER: $msg")
-                    }
-
-                    else -> {
-                        needsPrefill = false
-                        ChatFormatter.buildDeltaFromUser(msg)
-                    }
-                }
                 Log.d("PROMPT", "Sending prompt:\n$prompt")
                 Log.d("PROMPT", "Full session:\n${session.fullPrompt()}")
 
                 val cb = object : LlmCallback {
                     override fun onResult(s: String) {
+                        if (s == ChatFormatter.getStopToken(modelType)) {
+                            if (modelType == ModelType.LLAVA) {
+                                module.stop()
+                            }
+                            return
+                        }
                         val clean = ChatFormatter.sanitizeChunk(s)
                         if (clean.isEmpty()) return
                         responseBuilder.append(clean)
+
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (now - lastUiUpdateMs < 80L) return
+                        lastUiUpdateMs = now
                         val partial = responseBuilder.toString()
                         runOnUiThread {
-                            messages[assistantMsgIndex] = Message(partial, isUser = false)
+                            //messages[assistantMsgIndex] = Message(partial, isUser = false)
                             messageAdapter.updateItem(
                                 assistantMsgIndex,
                                 Message(partial, isUser = false)
@@ -437,8 +539,8 @@ class MainActivity : AppCompatActivity() {
                                 statsText.text = line
                                 statsText.visibility = View.VISIBLE
                                 /*statsText.postDelayed({
-                                    statsText.visibility = View.GONE
-                                }, 3000)*/
+                                        statsText.visibility = View.GONE
+                                    }, 3000)*/
                             }
                             Log.d("LLM-Stats", line)
                         } catch (t: Throwable) {
@@ -447,35 +549,37 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 Log.d("SEND", "Calling generate with continuous prompt")
-                module.generate(prompt, 512.toInt(), cb, false)
+                module.generate(prompt, 128.toInt(), cb, false)
 
                 val finalText = responseBuilder.toString().trim()
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
 
                 withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
                     if (finalText.isNotEmpty()) {
                         session.appendAssistant(finalText)
                         Log.d("REPLY", "Final text: '$finalText'")
-                        messages[assistantMsgIndex] = Message(finalText, isUser = false)
+                        //messages[assistantMsgIndex] = Message(finalText, isUser = false)
                         messageAdapter.updateItem(assistantMsgIndex, Message(finalText, isUser = false))
                         messagesRecyclerView.scrollToPosition(assistantMsgIndex)
                     } else {
-                        messages.removeAt(assistantMsgIndex)
+                        //messages.removeAt(assistantMsgIndex)
                         messageAdapter.removeAt(assistantMsgIndex)
                         toast("No response generated")
                     }
                 }
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Generation failed", e)
-                    withContext(Dispatchers.Main) {
-                        toast("Generation failed: ${e.message}")
-                        // Remove the empty assistant message if generation fails
-                        if (messages.size > assistantMsgIndex) {
-                            messages.removeAt(assistantMsgIndex)
-                            messageAdapter.removeAt(assistantMsgIndex)
-                        }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Generation failed", e)
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    toast("Generation failed: ${e.message}")
+                    // Remove the empty assistant message if generation fails
+                    if (messages.size > assistantMsgIndex) {
+                        messages.removeAt(assistantMsgIndex)
+                        messageAdapter.removeAt(assistantMsgIndex)
                     }
                 }
+            }
         }
     }
     private fun loadSavedChat(thread: ChatThread) {
@@ -493,10 +597,12 @@ class MainActivity : AppCompatActivity() {
         // transcript to message bubbles/UI
         messages.clear()
         for (turn in session.turns) {
-            messages.add(Message(
-                text = turn.text,
-                isUser = turn.role == Turn.Role.User
-            ))
+            messages.add(
+                Message(
+                    text = turn.text,
+                    isUser = turn.role == Turn.Role.User
+                )
+            )
         }
         messageAdapter.setItems(messages)
         messagesRecyclerView.scrollToPosition(maxOf(0, messages.size - 1))
@@ -518,7 +624,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        }
+    }
     private fun loadChatList() {
         val threads = ChatStore.list(this)
         chatAdapter.submitList(threads)

@@ -148,6 +148,23 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:text="@string/select_backend"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/backendSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:background="@android:drawable/btn_dropdown"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
             android:text="@string/select_model"
             android:textStyle="bold"
             android:textSize="14sp"

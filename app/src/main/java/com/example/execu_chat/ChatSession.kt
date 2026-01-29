@@ -1,6 +1,6 @@
 package com.example.execu_chat
 
-class ChatSession {
+class ChatSession(private val modelType: ModelType) {
     private val _turns = mutableListOf<Turn>()
     val turns: List<Turn> get() = _turns
 
@@ -20,7 +20,7 @@ class ChatSession {
         _turns.add(Turn(Turn.Role.System, msg))
     }
 
-    fun fullPrompt(): String = ChatFormatter.buildFullPrompt(_turns)
+    fun fullPrompt(): String = ChatFormatter.buildFullPrompt(modelType, _turns)
 
     fun fullTranscript(): String =
         _turns.joinToString("\n") { t -> "${t.role}: ${t.text}" }

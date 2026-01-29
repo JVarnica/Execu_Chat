@@ -27,7 +27,18 @@ android {
     androidResources {
         noCompress += listOf("pte", "json", "model")
     }
+    flavorDimensions += "backend"
+    productFlavors {
+        create("xnnpack") {
+            dimension = "backend"
+            versionNameSuffix = "-xnnpack"
 
+        }
+        create("vulkan") {
+            dimension = "backend"
+            versionNameSuffix = "-vulkan"
+        }
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -44,8 +55,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+                "proguard-rules.pro")
         }
         debug {}
     }
@@ -55,7 +65,8 @@ android {
 
 }
 dependencies {
-    implementation(files("libs/executorch.aar"))
+    add("xnnpackImplementation", libs.executorch.xnnpack)
+    add("vulkanImplementation", libs.executorch.vulkan)
     implementation(libs.vosk.android)
     implementation(libs.androidx.appcompat)
     implementation(libs.google.material)

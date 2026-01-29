@@ -56,6 +56,12 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
             notifyItemChanged(index)
         }
     }
+    fun addItemAndReturnIndex(item: Message): Int {
+        items.add(item)
+        val idx = items.lastIndex
+        notifyItemInserted(idx)
+        return idx
+    }
 
     fun addItem(item: Message) {
         items.add(item)

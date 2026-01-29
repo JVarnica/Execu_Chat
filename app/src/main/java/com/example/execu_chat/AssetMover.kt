@@ -15,11 +15,6 @@ object AssetMover {
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
-    fun getVoiceModelsDirectory(context: Context): File {
-        val dir = File(context.filesDir, "voice_models")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
-    }
 
     suspend fun copyAssetToFiles(context: Context, name: String): String =
         withContext(Dispatchers.IO) {
