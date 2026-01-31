@@ -17,9 +17,6 @@ import kotlinx.coroutines.launch
 import androidx.core.view.GravityCompat
 import org.pytorch.executorch.extension.llm.LlmCallback
 import org.pytorch.executorch.extension.llm.LlmModule
-import org.pytorch.executorch.Module
-import org.pytorch.executorch.EValue
-import org.pytorch.executorch.Tensor
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
@@ -31,10 +28,8 @@ import android.util.Log
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-
 import org.json.JSONObject
 import java.io.File
-import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -52,7 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var messageAdapter: MessageAdapter
     private lateinit var input: EditText
     private lateinit var sysPrompt: EditText
-    private lateinit var sendBtn: Button
+    private lateinit var sendBtn: ImageButton
 
     private lateinit var micBtn: ImageButton
     private lateinit var chatList: RecyclerView
@@ -67,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var userSystemPrompt: String = ChatFormatter.DEFAULT_SYS_PROMPT
     private var shouldAddSysPrompt = true
     private var modelLoaded = false
+    private var isGenerating = false
     private var needsPrefill = true
     private var currentChatId: String? = null
     private var selectedImageUri: Uri? = null
@@ -83,8 +79,6 @@ class MainActivity : AppCompatActivity() {
     //private var llavaModel: Module? = null
 
     private var currModelConfig: ModelConfig = ModelConfigs.ALL.first { it.modelType == ModelType.LLAMA_3 }
-
-    private val executor: Executor = Executors.newSingleThreadExecutor()
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
@@ -111,24 +105,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.main_menu)
-        hideSystemBars()
         initializeViews()
         setupListeners()
         loadChatList()
         session = ChatSession(currModelConfig.modelType)
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
-    }
-
-    private fun hideSystemBars() {
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }
     private fun initializeViews() {
 
@@ -220,7 +201,11 @@ class MainActivity : AppCompatActivity() {
         }
         // Send button
         sendBtn.setOnClickListener {
-            sendMessage()
+            if (isGenerating) {
+                stopGen()
+            } else {
+                sendMessage()
+            }
         }
 
         attachBtn.setOnClickListener {
@@ -232,6 +217,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun setupBackendSpinner() {
+        // Choose backend xnnpack or vulkan
         val backendNames = listOf(
             BackendType.getDisplayName(BackendType.XNNPACK),
             BackendType.getDisplayName(BackendType.VULKAN),
@@ -271,6 +257,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun setupModelSpinner() {
+        // chnage models logic
         val modelNames = ModelConfigs.ALL.map { it.displayName }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, modelNames)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -427,6 +414,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private fun stopGen() {
+        llmModule?.stop()
+        updateSendBtnState(false)
+        toast("Generation Stopped!!")
+        Log.d("MainActivity", "Generation stopped!")
+    }
     private fun prefillImage() {
         toast("Processing Image...")
         val imageUri = selectedImageUri!!
@@ -499,6 +492,7 @@ class MainActivity : AppCompatActivity() {
         val assistantMsgIndex = messageAdapter.addItemAndReturnIndex(Message("", isUser = false))
         messagesRecyclerView.scrollToPosition(assistantMsgIndex)
 
+        updateSendBtnState(true)
         val responseBuilder = StringBuilder()
         gateUi(loaded = true, busy = true)
 
@@ -571,6 +565,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
 
                 withContext(Dispatchers.Main) {
+                    updateSendBtnState(false)
                     gateUi(loaded = true, busy = false)
                     if (finalText.isNotEmpty()) {
                         session.appendAssistant(finalText)
@@ -587,6 +582,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 Log.e("MainActivity", "Generation failed", e)
                 withContext(Dispatchers.Main) {
+                    updateSendBtnState(false)
                     gateUi(loaded = true, busy = false)
                     toast("Generation failed: ${e.message}")
                     // Remove the empty assistant message if generation fails
@@ -595,6 +591,18 @@ class MainActivity : AppCompatActivity() {
                         messageAdapter.removeAt(assistantMsgIndex)
                     }
                 }
+            }
+        }
+    }
+    private fun updateSendBtnState(generating: Boolean) {
+        isGenerating = generating
+        runOnUiThread {
+            if (generating) {
+                sendBtn.setImageResource(R.drawable.outline_block_24)
+                sendBtn.contentDescription = "Stop"
+            } else {
+                sendBtn.setImageResource(R.drawable.baseline_send_24)
+                sendBtn.contentDescription = getString(R.string.send_button)
             }
         }
     }
@@ -841,11 +849,11 @@ class MainActivity : AppCompatActivity() {
         loadBtn.isEnabled = !busy
         sendBtn.visibility = View.VISIBLE
         progress.visibility = if (busy) View.VISIBLE else View.GONE
-        input.isEnabled = loaded && !busy
-        sendBtn.isEnabled = loaded && !busy
+        input.isEnabled = loaded && !busy && !isGenerating
+        sendBtn.isEnabled = loaded && (!busy || isGenerating)
         newChatBtn.isEnabled = !busy
         saveBtn.isEnabled = !busy
-        micBtn.isEnabled = loaded && !busy
+        micBtn.isEnabled = loaded && !busy && !isGenerating
         micBtn.alpha = if (listening) 0.6f else 1f
     }
 

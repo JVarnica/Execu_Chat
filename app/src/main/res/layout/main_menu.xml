@@ -3,13 +3,15 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/drawerLayout"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true">
 
     <!-- Main content -->
     <LinearLayout
         android:orientation="vertical"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:fitsSystemWindows="true">
 
         <!-- Top app bar with logo (hamburger / logo button) -->
         <androidx.appcompat.widget.Toolbar
@@ -106,11 +108,13 @@
                 android:scrollbars="vertical"
                 android:overScrollMode="always" />
 
-            <Button
+            <ImageButton
                 android:id="@+id/sendBtn"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/send_button"
+                android:contentDescription="@string/send_button"
+                android:src="@drawable/baseline_send_24"
+                android:background="?attr/selectableItemBackgroundBorderless"
                 android:layout_marginStart="8dp" />
 
             <ImageButton
@@ -143,7 +147,8 @@
         android:layout_gravity="start"
         android:background="?attr/colorSurface"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:padding="16dp"
+        android:fitsSystemWindows="true">
 
         <TextView
             android:layout_width="wrap_content"
