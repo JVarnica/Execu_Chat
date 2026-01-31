@@ -528,7 +528,6 @@ class MainActivity : AppCompatActivity() {
                             messagesRecyclerView.scrollToPosition(assistantMsgIndex)
                         }
                     }
-
                     override fun onStats(stats: String) {
                         try {
                             val j = JSONObject(stats)
