@@ -1,5 +1,5 @@
-Having a fully offline AI model to talk to when no internet was the goal. Needs to be small and converstational with easy quantifying. I wanted to stay within the PyTorch framework, and it is
-very lightweight so was used instead of Tensorflow. 
+Execu_Chat is an on-device android app which runs LLMs using Executorch (wanted to keep Pytorch native, has kv_cache optimizations, and vulkan backend to use phone gpu). OFFLINE inference was the point- how well can a model run on a mobile phone and what size can it go up to?
 
-App is fully running using the vulkan backend it is nearly fully delegated. .... show delegation here.  I have added voice but it uses vosk out of laziness TODO keeping the whole framework there.
-as the JNI bindings work properly. 
+##Features
+
+
