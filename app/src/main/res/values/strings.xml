@@ -7,6 +7,7 @@
     <string name="voice_input">Voice!!</string>
     <string name="select_model">Select Model</string>
     <string name="select_backend">Select Backend</string>
+    <string name="system_prompt">System Prompt</string>
     <string name="Load_button">Load</string>
     <string name="newChat_button">New Chat</string>
     <string name="image_input">Select Image</string>

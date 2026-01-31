@@ -20,6 +20,8 @@ data class Turn(val role: Role, val text: String) {
 object ChatFormatter {
 
     const val USER_PLACEHOLDER = "{{ user_prompt }}"
+    const val SYSTEM_PLACEHOLDER = "{{ system_prompt }}"
+    const val DEFAULT_SYS_PROMPT = "You are a helpful assistant, answer in a few sentences"
     fun getStopToken(modelType: ModelType): String {
         return when (modelType) {
             ModelType.LLAMA_3 -> "<|eot_id|>"
@@ -32,22 +34,17 @@ object ChatFormatter {
         return if (stopToken.isNotEmpty()) listOf(stopToken) else emptyList()
     }
 
-    fun buildSystemPrompt(modelType: ModelType, systemText: String): String {
+    fun buildSystemPromptTemplate(modelType: ModelType): String {
         return when (modelType) {
             ModelType.LLAMA_3 -> {
                 "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n" +
-                        systemText.trim() +
+                        SYSTEM_PLACEHOLDER +
                         "<|eot_id|>"
             }
             ModelType.QWEN_3 -> {
-                "<|im_start|>system\n" +
-                        systemText.trim() +
-                        "\n<|im_end|>\n"
+                "<|im_start|>system\n$SYSTEM_PLACEHOLDER<|im_end|>\n"
             }
-            ModelType.LLAVA -> {
-                // LLaVA uses preset prompt, not formatted system prompt
-                ""
-            }
+            else -> ""
         }
     }
     fun buildUserPrompt(modelType: ModelType, userText: String, thinkingMode: Boolean = false): String {
@@ -81,10 +78,10 @@ object ChatFormatter {
         }
 
         // Add system prompt if present
-        val systemTurn = turns.firstOrNull { it.role == Turn.Role.System }
-        if (systemTurn != null && systemTurn.text.isNotBlank()) {
-            sb.append(buildSystemPrompt(modelType, systemTurn.text))
-        }
+        //val systemTurn = turns.firstOrNull { it.role == Turn.Role.System }
+        //if (systemTurn != null && systemTurn.text.isNotBlank()) {
+        //    sb.append(buildSystemPrompt(modelType, systemTurn.text))
+        //}
 
         // Add conversation turns
         turns.filter { it.role != Turn.Role.System }.forEach { turn ->
@@ -184,7 +181,7 @@ object ChatFormatter {
                 "The assistant gives helpful, detailed, and polite answers to the human's questions. USER: "
     }
     fun getLlavaFirstTurnUserPrompt(): String {
-        return "$USER_PLACEHOLDER ASSISTANT:"
+        return "USER: $USER_PLACEHOLDER ASSISTANT:"
     }
 }
 

@@ -19,7 +19,7 @@ object ModelConfigs {
     val LLAVA = ModelConfig(
         modelType = ModelType.LLAVA,
         modelFileName = "llava.pte",
-        tokenizerFileName = "llava_tokenizer.model",
+        tokenizerFileName = "llava_tokenizer.bin",
         displayName = "llava"
     )
     val LLAMA_S = ModelConfig(

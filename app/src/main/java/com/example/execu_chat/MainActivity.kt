@@ -1,6 +1,7 @@
 package com.example.execu_chat
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
@@ -49,8 +50,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var messagesRecyclerView: RecyclerView
     private lateinit var statsText: TextView
     private lateinit var messageAdapter: MessageAdapter
-    private val messages = mutableListOf<Message>()
     private lateinit var input: EditText
+    private lateinit var sysPrompt: EditText
     private lateinit var sendBtn: Button
 
     private lateinit var micBtn: ImageButton
@@ -58,10 +59,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var modelSpinner: Spinner
     private lateinit var attachBtn: ImageButton
     private lateinit var backendSpinner: Spinner
+    private val messages = mutableListOf<Message>()
     private var selectedBackend: BackendType = BackendType.XNNPACK
 
     @Volatile private var llmModule: LlmModule? = null
     @Volatile private var lastUiUpdateMs = 0L
+    private var userSystemPrompt: String = ChatFormatter.DEFAULT_SYS_PROMPT
     private var shouldAddSysPrompt = true
     private var modelLoaded = false
     private var needsPrefill = true
@@ -152,6 +155,7 @@ class MainActivity : AppCompatActivity() {
         input = findViewById(R.id.input)
         backendSpinner = findViewById(R.id.backendSpinner)
         modelSpinner = findViewById(R.id.modelSpinner)
+        sysPrompt = findViewById(R.id.sysBtn)
 
         // Initially disable chat list
         chatList.isEnabled = false
@@ -183,6 +187,25 @@ class MainActivity : AppCompatActivity() {
         // Save chat
         saveBtn.setOnClickListener {
             saveCurrentChat()
+        }
+        // System prompt - updates when user presses "Done" on keyboard
+        sysPrompt.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                systemPromptChange()
+                // Hide keyboard
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                imm.hideSoftInputFromWindow(sysPrompt.windowToken, 0)
+                true
+            } else {
+                false
+            }
+        }
+        // Also update when user taps away (loses focus)
+        sysPrompt.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                systemPromptChange()
+
+            }
         }
 
         // RecyclerView for saved chats -open saved chat
@@ -449,21 +472,14 @@ class MainActivity : AppCompatActivity() {
         val prompt = when {
             modelType == ModelType.LLAVA && hasImage -> {
                 needsPrefill = false
-                "$msg ASSISTANT:"
-            }
-
-            modelType == ModelType.LLAVA && needsPrefill -> {
-                needsPrefill = false
                 shouldAddSysPrompt = false
-                ChatFormatter.getLlavaFirstTurnUserPrompt().replace(ChatFormatter.USER_PLACEHOLDER, msg.trim())
+                ChatFormatter.getLlavaFirstTurnUserPrompt().replace(ChatFormatter.USER_PLACEHOLDER, msg)
             }
             else -> {
-                val sysPrompt = if (shouldAddSysPrompt) {
+                val sysPrompt = if (shouldAddSysPrompt && modelType != ModelType.LLAVA) {
                     toast("Adding system prompt!")
-                    ChatFormatter.buildSystemPrompt(
-                        modelType,
-                        "You are a helpful assistant, be concise"
-                    )
+                    ChatFormatter.buildSystemPromptTemplate(
+                        modelType).replace(ChatFormatter.SYSTEM_PLACEHOLDER, userSystemPrompt)
                 } else {
                     ""
                 }
@@ -549,7 +565,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 Log.d("SEND", "Calling generate with continuous prompt")
-                module.generate(prompt, 128.toInt(), cb, false)
+                module.generate(prompt, 768.toInt(), cb, false)
 
                 val finalText = responseBuilder.toString().trim()
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
@@ -581,6 +597,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+    private fun systemPromptChange() {
+        val newSysPrompt = sysPrompt.text.toString().trim().ifEmpty { ChatFormatter.DEFAULT_SYS_PROMPT }
+        userSystemPrompt = newSysPrompt
+        shouldAddSysPrompt = true
+        Log.d("SysPrompt", "System prompt updated: $newSysPrompt")
+        toast("System prompt updated!")
     }
     private fun loadSavedChat(thread: ChatThread) {
         Log.d("MainActivity", "--Loading saved chat!!--")

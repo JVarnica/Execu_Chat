@@ -179,6 +179,25 @@
             android:paddingStart="12dp"
             android:paddingEnd="12dp" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/system_prompt"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <EditText
+            android:id="@+id/sysBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:minLines="1"
+            android:maxLines="4"
+            android:gravity="top|start"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:imeOptions="actionDone"/>
+
         <Button
             android:id="@+id/loadBtn"
             android:layout_width="match_parent"
