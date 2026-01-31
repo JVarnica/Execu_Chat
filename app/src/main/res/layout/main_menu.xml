@@ -114,6 +114,16 @@
                 android:layout_marginStart="8dp" />
 
             <ImageButton
+                android:id="@+id/galleryBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/image_input"
+                android:src="@android:drawable/ic_menu_gallery"
+                app:tint="@android:color/black"
+                android:layout_marginStart="8dp" />
+
+            <ImageButton
                 android:id="@+id/micBtn"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
@@ -134,6 +144,59 @@
         android:background="?attr/colorSurface"
         android:orientation="vertical"
         android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/select_backend"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/backendSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:background="@android:drawable/btn_dropdown"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/select_model"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/modelSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:background="@android:drawable/btn_dropdown"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/system_prompt"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:paddingBottom="8dp" />
+
+        <EditText
+            android:id="@+id/sysBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:importantForAutofill="no"
+            android:minLines="1"
+            android:maxLines="4"
+            android:gravity="top|start"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:imeOptions="actionDone"/>
 
         <Button
             android:id="@+id/loadBtn"

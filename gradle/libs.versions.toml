@@ -1,5 +1,5 @@
 [versions]
-agp = "8.13.0"
+agp = "8.13.2"
 kotlin = "2.2.20"
 coreKtx = "1.17.0"
 junit = "4.13.2"
@@ -16,6 +16,8 @@ soloader = "0.12.1"
 recyclerview = "1.4.0"
 viewpager2 = "1.1.0"
 vosk = "0.3.70"
+executorch-xnnpack = "1.0.1"
+executorch-vulkan = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +42,8 @@ vosk-android = { module = "com.alphacephei:vosk-android", version.ref = "vosk" }
 facebook-fbjni = { group = "com.facebook.fbjni", name = "fbjni", version.ref = "fbjni"}
 facebook-nativeloader = { group = "com.facebook.soloader", name = "nativeloader", version.ref = "nativeloader"}
 facebook-soloader = { group = "com.facebook.soloader", name = "soloader", version.ref= "soloader" }
+executorch-xnnpack = { group = "org.pytorch", name = "executorch-android", version.ref = "executorch-xnnpack"}
+executorch-vulkan = { group = "org.pytorch", name = "executorch-android-vulkan", version.ref = "executorch-vulkan"}
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
