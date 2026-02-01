@@ -31,12 +31,12 @@ android {
     productFlavors {
         create("xnnpack") {
             dimension = "backend"
-            versionNameSuffix = "-xnnpack"
+            manifestPlaceholders["backendType"] = "XNNPACK"
 
         }
         create("vulkan") {
             dimension = "backend"
-            versionNameSuffix = "-vulkan"
+            manifestPlaceholders["backendType"] = "VULKAN"
         }
     }
     packaging {
@@ -65,8 +65,8 @@ android {
 
 }
 dependencies {
-    add("xnnpackImplementation", libs.executorch.xnnpack)
     add("vulkanImplementation", libs.executorch.vulkan)
+    add("xnnpackImplementation", files("libs/executorch.aar"))
     implementation(libs.vosk.android)
     implementation(libs.androidx.appcompat)
     implementation(libs.google.material)

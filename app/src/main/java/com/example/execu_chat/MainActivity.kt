@@ -2,9 +2,14 @@ package com.example.execu_chat
 
 import android.Manifest
 import android.content.Context
+import android.media.AudioRecord
+import android.media.AudioFormat
+import android.media.MediaRecorder
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Looper
+import android.os.Handler
 import android.widget.*
 import android.view.View
 import androidx.lifecycle.lifecycleScope
@@ -20,18 +25,16 @@ import org.pytorch.executorch.extension.llm.LlmModule
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
-import org.vosk.Model
-import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
 import android.util.Log
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import org.json.JSONObject
+import org.pytorch.executorch.Module
+import org.pytorch.executorch.Tensor
+import org.pytorch.executorch.EValue
 import java.io.File
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.channels.NonReadableChannelException
 
 
 class MainActivity : AppCompatActivity() {
@@ -70,13 +73,29 @@ class MainActivity : AppCompatActivity() {
     private lateinit var chatAdapter: ChatAdapter
 
     private lateinit var session: ChatSession
+    //asr whisper
+    private var whisperPreproc: Module? = null
+    private var whisperModel: Module? = null
 
-    // Vosk (inline, no backend)
-    private var voskModel: Model? = null
-    private var speechService: SpeechService? = null
-    private var sttListening = false
-    private var sttBuffer = StringBuilder()
-    //private var llavaModel: Module? = null
+    private var whisperLoaded: Boolean = false
+    // Audio recording for Whisper
+    private var audioRecord: AudioRecord? = null
+    private var isRecording = false
+    private var recordingThread: Thread? = null
+    private val audioHandler = Handler(Looper.getMainLooper())
+    private val recordDurationMs = 5000L
+
+    private val sampleRate = 16000
+    private val channelConfig = AudioFormat.CHANNEL_IN_MONO
+    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+    private val audioBufferSize by lazy {
+        AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+    }
+    private val pcmCollector = ByteArrayOutputStream()
+
+    private val WHISPER_PREPROC_ASSET = "whisper_preprocess.pte"
+    private val WHISPER_MODEL_ASSET = "whisper-small-fp32.pte"
+    private val WHISPER_TOKENIZER_ASSET = "wtokenizer.json"
 
     private var currModelConfig: ModelConfig = ModelConfigs.ALL.first { it.modelType == ModelType.LLAMA_3 }
 
@@ -85,7 +104,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            toggleMic()
+            onMicClicked()
         } else Toast.makeText(
             this,
             "Microphone permission required for voice input",
@@ -197,7 +216,7 @@ class MainActivity : AppCompatActivity() {
         chatList.adapter = chatAdapter
 
         micBtn.setOnClickListener {
-            loadVoskModel()
+            onMicClicked()
         }
         // Send button
         sendBtn.setOnClickListener {
@@ -674,40 +693,6 @@ class MainActivity : AppCompatActivity() {
         }
         drawerLayout.closeDrawer(GravityCompat.START)
     }
-    private fun loadVoskModel(){
-        if (!ensureRecordPermissionOrRequest()) return
-
-        if (voskModel == null) {
-            // First time: copy directory from assets to filesDir, then load Model
-            gateUi(loaded = true, busy = true, listening = false)
-            Toast.makeText(this, "Preparing voice model…", Toast.LENGTH_SHORT).show()
-
-            lifecycleScope.launch {
-                try {
-                    // copy vosk-model-small-en-us/ from assets → filesDir
-                    val modelPath = AssetMover.copyAssetDirToFiles(
-                        context = this@MainActivity,
-                        assetDir = "vosk-model-small-en-us"
-                    )
-                    // load vosk model from filesDir
-                    val model = withContext(Dispatchers.IO) { Model(modelPath) }
-                    voskModel = model
-
-                    gateUi(loaded = true, busy = false, listening = false)
-                    toggleMic()
-                } catch (t: Throwable) {
-                    gateUi(loaded = true, busy = false, listening = false)
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Voice model error: ${t.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        } else {
-            toggleMic()
-        }
-    }
     private fun deleteSavedChat(thread: ChatThread){
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Delete Chat")
@@ -729,117 +714,382 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun toggleMic() {
-        val m = voskModel ?: return
-        if (!sttListening) {
-            try {
-                val recognizer = Recognizer(m, 16000.0f)
-                speechService = SpeechService(recognizer, 16000.0f).also {
-                    it.startListening(voskListener)
-                }
-                sttBuffer.setLength(0)
-                sttListening = true
-                input.requestFocus()
-                input.setSelection(input.text.length)
+    private fun onMicClicked() {
+        if (!ensureRecordPermissionOrRequest()) return
 
-                gateUi(loaded = true, busy = false, listening = true)
-                Toast.makeText(this, "Listening… tap mic to stop", Toast.LENGTH_SHORT).show()
-            } catch (t: Throwable) {
-                Toast.makeText(this, "Mic start failed: ${t.message}", Toast.LENGTH_LONG).show()
-                resetMicUi()
+        if (!whisperLoaded) {
+            // First time: load Whisper modules
+            gateUi(loaded = true, busy = true)
+            toast("Loading Whisper model...")
+
+            lifecycleScope.launch(Dispatchers.IO) {
+                val success = loadWhisperModules()
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    if (success) {
+                        toast("Whisper loaded. Tap mic to record!")
+                        startRecording()
+                    } else {
+                        toast("Failed to load Whisper modules")
+                    }
+                }
             }
         } else {
-            stopListening()
-            Toast.makeText(this, "Mic off", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun stopListening() {
-        try { speechService?.stop() } catch (_: Throwable) { }
-        speechService = null
-        sttListening = false
-
-        gateUi(loaded = true, busy = false, listening = false)
-
-        input.postDelayed({
-            if (!sttListening) {
-                applyBufferToInput()
+            // Toggle recording
+            if (!isRecording) {
+                toast("Recording... tap mic to stop")
+                startRecording()
+            } else {
+                toast("Processing audio...")
+                stopRecordingAndRunWhisper()
             }
-        }, 150)
-    }
-    private fun applyBufferToInput() {
-        val finalText = sttBuffer.toString().trim()
-        input.post {
-            Log.d("UI", "setText(final) -> '$finalText'")
-            input.setText(finalText)
-            input.setSelection(input.text.length )
         }
     }
 
-    private fun extractPartial(json: String?): String {
-        return try {
-            JSONObject(json ?: "{}").optString("partial", "")
+    private suspend fun loadWhisperModules(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val modelsDir = AssetMover.getModelsDirectory(this@MainActivity)
+
+            val preprocPath = File(modelsDir, WHISPER_PREPROC_ASSET).absolutePath
+            val modelPath = File(modelsDir, WHISPER_MODEL_ASSET).absolutePath
+            val tokenizerPath = File(modelsDir, WHISPER_TOKENIZER_ASSET).absolutePath
+
+            // Copy preprocessor from assets if not exists
+            if (!File(preprocPath).exists()) {
+                withContext(Dispatchers.Main) {
+                    toast("Copying Whisper preprocessor from assets...")
+                }
+                try {
+                    AssetMover.copyAssetToModelsDir(this@MainActivity, WHISPER_PREPROC_ASSET)
+                    Log.d("ASR", "✓ Preprocessor copied from assets")
+                } catch (e: Exception) {
+                    Log.e("ASR", "Failed to copy preprocessor: ${e.message}")
+                    return@withContext false
+                }
+            } else {
+                Log.d("ASR", "Preprocessor already exists: $preprocPath")
+            }
+
+            // Copy model from assets if not exists
+            if (!File(modelPath).exists()) {
+                withContext(Dispatchers.Main) {
+                    toast("Copying Whisper model from assets...")
+                }
+                try {
+                    AssetMover.copyAssetToModelsDir(this@MainActivity, WHISPER_MODEL_ASSET)
+                    Log.d("ASR", "✓ Whisper model copied from assets")
+                } catch (e: Exception) {
+                    Log.e("ASR", "Failed to copy model: ${e.message}")
+                    return@withContext false
+                }
+            } else {
+                Log.d("ASR", "Whisper model already exists: $modelPath")
+            }
+            // Copy tokenizer from assets if not exists
+            if (!File(tokenizerPath).exists()) {
+                withContext(Dispatchers.Main) {
+                    toast("Copying Whisper tokenizer from assets...")
+                }
+                try {
+                    AssetMover.copyAssetToModelsDir(this@MainActivity, WHISPER_TOKENIZER_ASSET)
+                    Log.d("ASR", "✓ Whisper tokenizer copied from assets")
+                } catch (e: Exception) {
+                    Log.e("ASR", "Failed to copy tokenizer: ${e.message}")
+                    return@withContext false
+                }
+            } else {
+                Log.d("ASR", "Whisper tokenizer already exists: $modelPath")
+            }
+
+            // Verify files exist and have content
+            val preprocFile = File(preprocPath)
+            val modelFile = File(modelPath)
+            val tokenizerFile = File(tokenizerPath)
+
+            Log.d(
+                "ASR",
+                "Preprocessor: ${preprocFile.absolutePath}, size: ${preprocFile.length()} bytes"
+            )
+            Log.d("ASR", "Model: ${modelFile.absolutePath}, size: ${modelFile.length()} bytes")
+            Log.d(
+                "ASR",
+                "Tokenizer: ${tokenizerFile.absolutePath}, size: ${tokenizerFile.length()} bytes"
+            )
+
+            if (!preprocFile.exists() || preprocFile.length() == 0L) {
+                Log.e("ASR", "Preprocessor file missing or empty")
+                withContext(Dispatchers.Main) {
+                    toast("Whisper preprocessor file not found")
+                }
+                return@withContext false
+            }
+            if (!modelFile.exists() || modelFile.length() == 0L) {
+                Log.e("ASR", "Model file missing or empty")
+                withContext(Dispatchers.Main) {
+                    toast("Whisper model file not found")
+                }
+                return@withContext false
+            }
+            if (!tokenizerFile.exists() || tokenizerFile.length() == 0L) {
+                Log.e("ASR", "Tokenizer file missing or empty")
+                withContext(Dispatchers.Main) {
+                    toast("Whisper tokenizer file not found")
+                }
+                return@withContext false
+            }
+
+            whisperPreproc = Module.load(preprocPath)
+            Log.d(
+                "ASR",
+                "Preprocessor loaded. Methods: ${whisperPreproc?.methods?.contentToString()}"
+            )
+
+            whisperModel = Module.load(modelPath)
+            Log.d("ASR", "Model loaded. Methods: ${whisperModel?.methods?.contentToString()}")
+
+            // Load tokenizer from assets (small file, keep in assets)
+            //whisperTokenizer = Module.load()
+
+            whisperLoaded = true
+            Log.d("ASR", "Whisper modules loaded successfully")
+            true
+        } catch (t: Throwable) {
+            Log.e("ASR", "Failed to load Whisper modules", t)
+            whisperLoaded = false
+            false
+        }
+    }
+
+    private fun startRecording() {
+        Log.d("ASR", "startRecording() called")
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            toast("No mic permission")
+            return
+        }
+        val bufSize = audioBufferSize
+        if (bufSize <= 0) {
+            toast("AudioRecord unsupported on this device")
+            return
+        }
+
+        pcmCollector.reset()
+
+        val ar = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate,
+            channelConfig,
+            audioFormat,
+            bufSize
+        )
+        if (ar.state != AudioRecord.STATE_INITIALIZED) {
+            toast("Failed to init audio recorder")
+            return
+        }
+
+        audioRecord = ar
+
+        isRecording = true
+        micBtn.alpha = 0.6f
+
+        ar.startRecording()
+        Log.d("ASR", "AudioRecord started, bufferSize=$bufSize")
+
+        // Background thread: read until isRecording == false
+        recordingThread = Thread {
+            Log.d("ASR", "recordingThread started")
+            val buffer = ByteArray(bufSize)
+
+            while (isRecording) {
+                val read = ar.read(buffer, 0, buffer.size)
+                if (read > 0) {
+                    synchronized(pcmCollector) {
+                        pcmCollector.write(buffer, 0, read)
+                    }
+                }
+            }
+            Log.d("ASR", "recordingThread exiting")
+        }.also { it.start() }
+
+        // Safety timeout: auto-stop after 60 seconds
+        audioHandler.postDelayed({
+            if (isRecording) {
+                Log.d("ASR", "Max record time reached (60s), auto-stopping")
+                toast("Max record time reached (60s), stopping")
+                stopRecordingAndRunWhisper()
+            }
+        }, 60_000L)
+    }
+
+    private fun stopRecordingAndRunWhisper() {
+        Log.d("ASR", "stopRecordingAndRunWhisper()")
+        if (!isRecording) {
+            Log.d("ASR", "Not recording, nothing to stop.")
+            return
+        }
+        isRecording = false
+
+        try {
+            audioRecord?.stop()
         } catch (_: Throwable) {
-            ""
         }
-    }
+        audioRecord?.release()
+        audioRecord = null
+        micBtn.alpha = 1f
 
-    private fun extractText(json: String?): String {
-        return try {
-            JSONObject(json ?: "{}").optString("text", "")
-        } catch (_: Throwable) {
-            ""
+        val audioBytes = synchronized(pcmCollector) { pcmCollector.toByteArray() }
+        if (audioBytes.isEmpty()) {
+            toast("No audio captured")
+            return
         }
-    }
-    private val voskListener = object : RecognitionListener {
 
-        override fun onPartialResult(hypothesis: String?) {
-            Log.d("VOSK", "partial=$hypothesis")
-            val partial = extractPartial(hypothesis)
-            if (partial.isNotEmpty()) {
-                // live preview: sttBuffer + current partial (do not append partial into buffer)
-                val preview = buildString {
-                    append(sttBuffer.toString())
-                    if (isNotEmpty()) append(' ')
-                    append(partial)
-                }.trim()
-                input.post {
-                    input.setText(preview)
-                    input.setSelection(input.text.length)
+        gateUi(loaded = true, busy = true)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val transcription = runWhisperOnce(audioBytes)
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    Log.d("ASR", "Transcription: $transcription")
+                }
+            } catch (t: Throwable) {
+                Log.e("ASR", "Whisper run failed", t)
+                withContext(Dispatchers.Main) {
+                    gateUi(loaded = true, busy = false)
+                    toast("Whisper error: ${t.message}")
                 }
             }
         }
+    }
 
-        override fun onResult(hypothesis: String?) {
-            Log.d("VOSK", "onResult=$hypothesis")
-            //
-            val text = extractText(hypothesis)
-            if (text.isNotEmpty()) {
-                if (sttBuffer.isNotEmpty()) sttBuffer.append(' ')
-                sttBuffer.append(text)
+    private fun pcm16ToFloatArray(audioBytes: ByteArray): FloatArray {
+        val totalSamples = audioBytes.size / 2
+        val floatSamples = FloatArray(totalSamples)
+        val byteBuffer =
+            ByteBuffer.wrap(audioBytes).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until totalSamples) {
+            // Normalize 16-bit PCM to [-1 ,1.0]
+            val sample = byteBuffer.short.toInt()
+            floatSamples[i] = if (sample < 0) {
+                sample / 32768.0f
+            } else {
+                sample / 32767.0f
             }
         }
+        return floatSamples
+    }
 
-        override fun onFinalResult(hypothesis: String?) {
-            Log.d("VOSK", "finalres=$hypothesis")
-            val text = extractText(hypothesis)
-            if (text.isNotEmpty()) {
-                if (sttBuffer.isNotEmpty()) sttBuffer.append(' ')
-                sttBuffer.append(text)
+    private fun runWhisperOnce(pcmBytes: ByteArray): String {
+        val preprocessor = whisperPreproc ?: error("Processor not loaded")
+        val model = whisperModel ?: error("Whisper model not loaded")
+
+        // Convert PCM16 to float
+        val floats = pcm16ToFloatArray(pcmBytes)
+        Log.d("ASR", "runWhisperOnce: raw samples = ${floats.size}")
+
+        try {
+            val targetLength = 480000
+            val paddedFloats = FloatArray(targetLength)
+            if (floats.size < targetLength) {
+                // Pad with zeros
+                floats.copyInto(paddedFloats, 0, 0, floats.size)
+                // Rest is already zeros
+                Log.d("ASR", "Padded from ${floats.size} to $targetLength")
+            } else {
+                // Truncate
+                floats.copyInto(paddedFloats, 0, 0, targetLength)
+                Log.d("ASR", "Truncated from ${floats.size} to $targetLength")
             }
+            // Use preprocessor
+            Log.d("ASR", "Computing mel spectrogram...")
+            val audioTensor = Tensor.fromBlob(paddedFloats, longArrayOf(paddedFloats.size.toLong()))
+            Log.d("ASR", "AudioTensor: ${audioTensor.shape().contentToString()}")
+            Log.d("ASR", "methods:  ${preprocessor.methods.contentToString()}")
+
+            val melTensor = preprocessor.forward(EValue.from(audioTensor))[0].toTensor()
+            Log.d("ASR", "Preprocessor done! Mel shape: ${melTensor}")
+
+
+            // Step 1: Run ENCODER
+            Log.d("ASR", "Running encoder...")
+            val encoderOut = model.execute("encoder", EValue.from(melTensor))
+            val encoderHiddenStates = encoderOut[0].toTensor()
+            Log.d("ASR", "Encoder output shape: ${encoderHiddenStates.shape().contentToString()}")
+
+            val tokenIds = decodeGreedy(encoderHiddenStates, maxNewTokens = 96)
+            Log.d("ASR", "Token IDs: ${tokenIds.joinToString(",")}")
+
+
+        } catch (e: Exception) {
+            Log.e("ASR", "CRASH DETAILS:")
+            Log.e("ASR", "Type: ${e.javaClass.name}")
+            Log.e("ASR", "Preprocessor error", e)
+            Log.e("ASR", "Error msg: ${e.message}")
+            Log.e("ASR", "Stack trace: ${e.stackTraceToString()}")
+            throw e
+        }
+        return ""
+    }
+    private fun argmaxRow(logits: FloatArray, offset: Int, len: Int): Int {
+        var bestIdx = 0
+        var bestVal = logits[offset]
+        for (i in 1 until len) {
+            val v = logits[offset + i]
+            if (v > bestVal) { bestVal = v; bestIdx = i }
+        }
+        return bestIdx
+    }
+
+    private fun scalarInt(method: String): Int {
+        val ev: EValue = whisperModel!!.execute(method)[0]
+        return ev.toInt().toInt()
+    }
+
+    private fun decodeGreedy(
+        encoderHiddenStates: Tensor,
+        maxNewTokens: Int = 96
+    ): IntArray {
+        val startId = scalarInt("decoder_start_token_id")
+        val eosId   = scalarInt("get_eos_id")
+        val vocab   = scalarInt("get_vocab_size") // keep if you need it later
+
+        val tokens = IntArray(maxNewTokens + 1)
+        var n = 0
+        tokens[n++] = startId
+
+        for (step in 0 until maxNewTokens) {
+            val tokSlice = tokens.copyOfRange(0, n)
+            val tokLong = LongArray(tokSlice.size) { i -> tokSlice[i].toLong() }
+            val inTok = Tensor.fromBlob(tokLong, longArrayOf(1L, n.toLong()))
+
+            val out = whisperModel!!.execute("text_decoder", EValue.from(inTok), EValue.from(encoderHiddenStates))
+
+            val logitsT = out[0].toTensor()
+            val shape = logitsT.shape()
+            val logits = logitsT.dataAsFloatArray
+
+            val nextId: Int = when (shape.size) {
+                3 -> {
+                    val seq = shape[1].toInt()
+                    val v = shape[2].toInt()
+                    val rowOffset = (seq - 1) * v
+                    argmaxRow(logits, rowOffset, v)
+                }
+                2 -> {
+                    val v = shape[1].toInt()
+                    argmaxRow(logits, 0, v)
+                }
+                1 -> argmaxRow(logits, 0, logits.size)
+                else -> throw IllegalStateException("Unexpected logits shape: ${shape.contentToString()}")
+            }
+
+            tokens[n++] = nextId
+            if (nextId == eosId) break
         }
 
-        override fun onError(e: Exception?) {
-            Log.e("VOSK", "error", e)
-            runOnUiThread {
-                Toast.makeText(this@MainActivity, "Voice error: ${e?.message}", Toast.LENGTH_LONG)
-                    .show()
-                resetMicUi()
-            }
-        }
-        override fun onTimeout() {
-            runOnUiThread { stopListening() }
-        }
+        return tokens.copyOfRange(0, n)
     }
 
     private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
@@ -870,10 +1120,6 @@ class MainActivity : AppCompatActivity() {
     private fun toast(msg: String) {
         runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
-    private fun resetMicUi() {
-        sttListening = false
-        input.hint = ""
-        gateUi(loaded = true, busy = false, listening = false)
-    }
+
 }
 
