@@ -27,11 +27,11 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.withContext
 import android.util.Log
 import org.json.JSONObject
-import org.pytorch.executorch.Module
-import org.pytorch.executorch.Tensor
-import org.pytorch.executorch.EValue
+import org.pytorch.executorch.extension.asr.AsrModule
+import org.pytorch.executorch.extension.asr.AsrCallback
 import java.io.File
 import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.NonReadableChannelException
@@ -74,11 +74,11 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var session: ChatSession
     //asr whisper
-    private var whisperPreproc: Module? = null
-    private var whisperModel: Module? = null
-
+    private var whisperAsr: AsrModule? = null
     private var whisperLoaded: Boolean = false
     // Audio recording for Whisper
+    private val asrLock = Any()
+    private val asrRaw = StringBuilder(4096)
     private var audioRecord: AudioRecord? = null
     private var isRecording = false
     private var recordingThread: Thread? = null
@@ -838,18 +838,7 @@ class MainActivity : AppCompatActivity() {
                 return@withContext false
             }
 
-            whisperPreproc = Module.load(preprocPath)
-            Log.d(
-                "ASR",
-                "Preprocessor loaded. Methods: ${whisperPreproc?.methods?.contentToString()}"
-            )
-
-            whisperModel = Module.load(modelPath)
-            Log.d("ASR", "Model loaded. Methods: ${whisperModel?.methods?.contentToString()}")
-
-            // Load tokenizer from assets (small file, keep in assets)
-            //whisperTokenizer = Module.load()
-
+            whisperAsr = AsrModule(modelPath, tokenizerPath, dataPath = null, preprocPath)
             whisperLoaded = true
             Log.d("ASR", "Whisper modules loaded successfully")
             true
@@ -949,10 +938,14 @@ class MainActivity : AppCompatActivity() {
         gateUi(loaded = true, busy = true)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val transcription = runWhisperOnce(audioBytes)
+                val wavFile = File(cacheDir, "whisper_recording.wav")
+                writeWav16kMonoPcm16(audioBytes, wavFile)
+                val transcription = transcribeWavFile(wavFile)
                 withContext(Dispatchers.Main) {
                     gateUi(loaded = true, busy = false)
                     Log.d("ASR", "Transcription: $transcription")
+                    input.setText(transcription)
+                    input.setSelection(transcription.length)
                 }
             } catch (t: Throwable) {
                 Log.e("ASR", "Whisper run failed", t)
@@ -963,135 +956,56 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private fun writeWav16kMonoPcm16(pcm16le: ByteArray, outFile: File) {
+        // 16kHz, mono, 16-bit PCM WAV
+        val channels = 1
+        val sampleRateHz = sampleRate
+        val bitsPerSample = 16
+        val byteRate = sampleRateHz * channels * bitsPerSample / 8
+        val blockAlign = (channels * bitsPerSample / 8).toShort()
+        val dataLen = pcm16le.size
+        val riffChunkSize = 36 + dataLen
 
-    private fun pcm16ToFloatArray(audioBytes: ByteArray): FloatArray {
-        val totalSamples = audioBytes.size / 2
-        val floatSamples = FloatArray(totalSamples)
-        val byteBuffer =
-            ByteBuffer.wrap(audioBytes).order(ByteOrder.LITTLE_ENDIAN)
-        for (i in 0 until totalSamples) {
-            // Normalize 16-bit PCM to [-1 ,1.0]
-            val sample = byteBuffer.short.toInt()
-            floatSamples[i] = if (sample < 0) {
-                sample / 32768.0f
-            } else {
-                sample / 32767.0f
+        val header = ByteArray(44)
+        val bb = ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        bb.put("RIFF".toByteArray(Charsets.US_ASCII))
+        bb.putInt(riffChunkSize)
+        bb.put("WAVE".toByteArray(Charsets.US_ASCII))
+        bb.put("fmt ".toByteArray(Charsets.US_ASCII))
+        bb.putInt(16) // PCM header size
+        bb.putShort(1) // PCM format
+        bb.putShort(channels.toShort())
+        bb.putInt(sampleRateHz)
+        bb.putInt(byteRate)
+        bb.putShort(blockAlign)
+        bb.putShort(bitsPerSample.toShort())
+        bb.put("data".toByteArray(Charsets.US_ASCII))
+        bb.putInt(dataLen)
+
+        FileOutputStream(outFile).use { fos ->
+            fos.write(header)
+            fos.write(pcm16le)
+            fos.flush()
+        }
+    }
+    private fun cleanWhisperText(raw: String): String {
+        var s = raw.replace(Regex("<\\|.*?\\|>"), "")
+        s = s.replace("<s>", "").replace("</s>", "")
+        s = s.replace(Regex("\\s+"), " ").trim()
+        return s
+    }
+    private suspend fun transcribeWavFile(wavFile: File): String = withContext(Dispatchers.IO) {
+        val asr = whisperAsr ?: error("Whisper not loaded")
+        synchronized(asrLock) { asrRaw.setLength(0) }
+        val cb = object : AsrCallback {
+            override fun onToken(token: String) {
+                synchronized(asrLock) { asrRaw.append(token) }
             }
         }
-        return floatSamples
+        asr.transcribe(wavFile.absolutePath, callback = cb)
+        val raw = synchronized(asrLock) { asrRaw.toString() }
+        cleanWhisperText(raw)
     }
-
-    private fun runWhisperOnce(pcmBytes: ByteArray): String {
-        val preprocessor = whisperPreproc ?: error("Processor not loaded")
-        val model = whisperModel ?: error("Whisper model not loaded")
-
-        // Convert PCM16 to float
-        val floats = pcm16ToFloatArray(pcmBytes)
-        Log.d("ASR", "runWhisperOnce: raw samples = ${floats.size}")
-
-        try {
-            val targetLength = 480000
-            val paddedFloats = FloatArray(targetLength)
-            if (floats.size < targetLength) {
-                // Pad with zeros
-                floats.copyInto(paddedFloats, 0, 0, floats.size)
-                // Rest is already zeros
-                Log.d("ASR", "Padded from ${floats.size} to $targetLength")
-            } else {
-                // Truncate
-                floats.copyInto(paddedFloats, 0, 0, targetLength)
-                Log.d("ASR", "Truncated from ${floats.size} to $targetLength")
-            }
-            // Use preprocessor
-            Log.d("ASR", "Computing mel spectrogram...")
-            val audioTensor = Tensor.fromBlob(paddedFloats, longArrayOf(paddedFloats.size.toLong()))
-            Log.d("ASR", "AudioTensor: ${audioTensor.shape().contentToString()}")
-            Log.d("ASR", "methods:  ${preprocessor.methods.contentToString()}")
-
-            val melTensor = preprocessor.forward(EValue.from(audioTensor))[0].toTensor()
-            Log.d("ASR", "Preprocessor done! Mel shape: ${melTensor}")
-
-
-            // Step 1: Run ENCODER
-            Log.d("ASR", "Running encoder...")
-            val encoderOut = model.execute("encoder", EValue.from(melTensor))
-            val encoderHiddenStates = encoderOut[0].toTensor()
-            Log.d("ASR", "Encoder output shape: ${encoderHiddenStates.shape().contentToString()}")
-
-            val tokenIds = decodeGreedy(encoderHiddenStates, maxNewTokens = 96)
-            Log.d("ASR", "Token IDs: ${tokenIds.joinToString(",")}")
-
-
-        } catch (e: Exception) {
-            Log.e("ASR", "CRASH DETAILS:")
-            Log.e("ASR", "Type: ${e.javaClass.name}")
-            Log.e("ASR", "Preprocessor error", e)
-            Log.e("ASR", "Error msg: ${e.message}")
-            Log.e("ASR", "Stack trace: ${e.stackTraceToString()}")
-            throw e
-        }
-        return ""
-    }
-    private fun argmaxRow(logits: FloatArray, offset: Int, len: Int): Int {
-        var bestIdx = 0
-        var bestVal = logits[offset]
-        for (i in 1 until len) {
-            val v = logits[offset + i]
-            if (v > bestVal) { bestVal = v; bestIdx = i }
-        }
-        return bestIdx
-    }
-
-    private fun scalarInt(method: String): Int {
-        val ev: EValue = whisperModel!!.execute(method)[0]
-        return ev.toInt().toInt()
-    }
-
-    private fun decodeGreedy(
-        encoderHiddenStates: Tensor,
-        maxNewTokens: Int = 96
-    ): IntArray {
-        val startId = scalarInt("decoder_start_token_id")
-        val eosId   = scalarInt("get_eos_id")
-        val vocab   = scalarInt("get_vocab_size") // keep if you need it later
-
-        val tokens = IntArray(maxNewTokens + 1)
-        var n = 0
-        tokens[n++] = startId
-
-        for (step in 0 until maxNewTokens) {
-            val tokSlice = tokens.copyOfRange(0, n)
-            val tokLong = LongArray(tokSlice.size) { i -> tokSlice[i].toLong() }
-            val inTok = Tensor.fromBlob(tokLong, longArrayOf(1L, n.toLong()))
-
-            val out = whisperModel!!.execute("text_decoder", EValue.from(inTok), EValue.from(encoderHiddenStates))
-
-            val logitsT = out[0].toTensor()
-            val shape = logitsT.shape()
-            val logits = logitsT.dataAsFloatArray
-
-            val nextId: Int = when (shape.size) {
-                3 -> {
-                    val seq = shape[1].toInt()
-                    val v = shape[2].toInt()
-                    val rowOffset = (seq - 1) * v
-                    argmaxRow(logits, rowOffset, v)
-                }
-                2 -> {
-                    val v = shape[1].toInt()
-                    argmaxRow(logits, 0, v)
-                }
-                1 -> argmaxRow(logits, 0, logits.size)
-                else -> throw IllegalStateException("Unexpected logits shape: ${shape.contentToString()}")
-            }
-
-            tokens[n++] = nextId
-            if (nextId == eosId) break
-        }
-
-        return tokens.copyOfRange(0, n)
-    }
-
     private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
         loadBtn.visibility = View.VISIBLE
         loadBtn.text = if (loaded) "Unload" else "Load"
