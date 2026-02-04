@@ -27,18 +27,7 @@ android {
     androidResources {
         noCompress += listOf("pte", "json", "model")
     }
-    flavorDimensions += "backend"
-    productFlavors {
-        create("xnnpack") {
-            dimension = "backend"
-            manifestPlaceholders["backendType"] = "XNNPACK"
 
-        }
-        create("vulkan") {
-            dimension = "backend"
-            manifestPlaceholders["backendType"] = "VULKAN"
-        }
-    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -62,11 +51,14 @@ android {
     kotlin {
         jvmToolchain(17)
     }
-
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
 }
 dependencies {
-    add("vulkanImplementation", libs.executorch.vulkan)
-    add("xnnpackImplementation", files("libs/executorch.aar"))
+    implementation(files("libs/executorch.aar"))
     implementation(libs.vosk.android)
     implementation(libs.androidx.appcompat)
     implementation(libs.google.material)
