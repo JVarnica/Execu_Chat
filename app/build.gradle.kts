@@ -51,11 +51,7 @@ android {
     kotlin {
         jvmToolchain(17)
     }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-        }
-    }
+
 }
 dependencies {
     implementation(files("libs/executorch.aar"))

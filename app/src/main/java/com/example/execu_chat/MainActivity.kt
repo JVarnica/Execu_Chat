@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var selectedBackend: BackendType = BackendType.XNNPACK
 
     @Volatile private var llmModule: LlmModule? = null
+    //private val melComputer = MelSpectrogramNative()
     private var whisperAsr: AsrModule? = null
     private var whisperLoaded: Boolean = false
     // Audio recording for Whisper
@@ -948,10 +949,8 @@ class MainActivity : AppCompatActivity() {
         // stop recording
         isRecording = false
 
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {
-        }
+        try { audioRecord?.stop() } catch (_: Throwable) { }
+
         audioRecord?.release()
         audioRecord = null
         micBtn.alpha = 1f
@@ -965,10 +964,19 @@ class MainActivity : AppCompatActivity() {
         isTranscribing = true
         gateUi(loaded = true, busy = true)
         executorchExecutor.submit {
+            var wavFile: File? = null
             try {
-                val wavFile = File(cacheDir, "whisper_recording.wav")
-                writeWav16kMonoPcm16(audioBytes, wavFile)
-                val transcription = transcribeWavFile(wavFile)
+                wavFile = File(cacheDir, "whisper_recording.wav")
+                writeWavPcm16Mono(wavFile, audioBytes,sampleRate)
+
+                val asr = whisperAsr ?: error("ASR not loaded!!")
+                val cb = object : AsrCallback {
+                    override fun onToken(token: String) {
+                        asrRaw.append(token)
+                    }
+                }
+                val text_raw = asr.transcribe(wavFile.absolutePath, callback = cb)
+                val transcription = cleanWhisperText(text_raw.toString())
                 Log.d("ASR", "Transcription: $transcription")
 
                 runOnUiThread {
@@ -984,63 +992,59 @@ class MainActivity : AppCompatActivity() {
                     gateUi(loaded = true, busy = false)
                     toast("Whisper error: ${t.message}")
                 }
+            } finally {
+                try {
+                    wavFile?.delete()
+                    Log.d("ASR","log file deleted")
+                } catch (_: Throwable) {}
             }
         }
     }
-    private fun writeWav16kMonoPcm16(pcm16le: ByteArray, outFile: File) {
-        // 16kHz, mono, 16-bit PCM WAV
-        val channels = 1
-        val sampleRateHz = sampleRate
+    private fun writeWavPcm16Mono(outFile: File, pcm16le: ByteArray, sampleRate: Int) {
+        val numChannels = 1
         val bitsPerSample = 16
-        val byteRate = sampleRateHz * channels * bitsPerSample / 8
-        val blockAlign = (channels * bitsPerSample / 8).toShort()
-        val dataLen = pcm16le.size
-        val riffChunkSize = 36 + dataLen
+        val byteRate = sampleRate * numChannels * (bitsPerSample / 8)
+        val blockAlign = (numChannels * (bitsPerSample / 8)).toShort()
 
-        val header = ByteArray(44)
-        val bb = ByteBuffer.wrap(header).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        bb.put("RIFF".toByteArray(Charsets.US_ASCII))
-        bb.putInt(riffChunkSize)
-        bb.put("WAVE".toByteArray(Charsets.US_ASCII))
-        bb.put("fmt ".toByteArray(Charsets.US_ASCII))
-        bb.putInt(16) // PCM header size
-        bb.putShort(1) // PCM format
-        bb.putShort(channels.toShort())
-        bb.putInt(sampleRateHz)
-        bb.putInt(byteRate)
-        bb.putShort(blockAlign)
-        bb.putShort(bitsPerSample.toShort())
-        bb.put("data".toByteArray(Charsets.US_ASCII))
-        bb.putInt(dataLen)
+        val dataSize = pcm16le.size
+        val riffChunkSize = 36 + dataSize
 
         FileOutputStream(outFile).use { fos ->
-            fos.write(header)
+            fos.write(byteArrayOf('R'.code.toByte(), 'I'.code.toByte(), 'F'.code.toByte(), 'F'.code.toByte()))
+            fos.write(intToLE(riffChunkSize))
+            fos.write(byteArrayOf('W'.code.toByte(), 'A'.code.toByte(), 'V'.code.toByte(), 'E'.code.toByte()))
+
+            fos.write(byteArrayOf('f'.code.toByte(), 'm'.code.toByte(), 't'.code.toByte(), ' '.code.toByte()))
+            fos.write(intToLE(16))
+            fos.write(shortToLE(1)) // PCM
+            fos.write(shortToLE(numChannels.toShort()))
+            fos.write(intToLE(sampleRate))
+            fos.write(intToLE(byteRate))
+            fos.write(shortToLE(blockAlign))
+            fos.write(shortToLE(bitsPerSample.toShort()))
+
+            fos.write(byteArrayOf('d'.code.toByte(), 'a'.code.toByte(), 't'.code.toByte(), 'a'.code.toByte()))
+            fos.write(intToLE(dataSize))
             fos.write(pcm16le)
-            fos.flush()
         }
     }
+    private fun intToLE(v: Int) = byteArrayOf(
+        (v and 0xFF).toByte(),
+        ((v ushr 8) and 0xFF).toByte(),
+        ((v ushr 16) and 0xFF).toByte(),
+        ((v ushr 24) and 0xFF).toByte()
+    )
+    private fun shortToLE(v: Short) = byteArrayOf(
+        (v.toInt() and 0xFF).toByte(),
+        ((v.toInt() ushr 8) and 0xFF).toByte()
+    )
     private fun cleanWhisperText(raw: String): String {
         var s = raw.replace(Regex("<\\|.*?\\|>"), "")
         s = s.replace("<s>", "").replace("</s>", "")
         s = s.replace(Regex("\\s+"), " ").trim()
         return s
     }
-    private fun transcribeWavFile(wavFile: File): String {
-        val asr = whisperAsr ?: error("Whisper not loaded")
-        if (!whisperLoaded) {
-            Log.e("ASR", "whisperLoaded flag is false!")
-            throw IllegalStateException("Whisper not loaded")
-        }
 
-        val cb = object : AsrCallback {
-            override fun onToken(token: String) {
-                asrRaw.append(token)
-            }
-        }
-        asr.transcribe(wavFile.absolutePath, callback = cb)
-        val raw = asrRaw.toString()
-        return cleanWhisperText(raw)
-    }
     private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
         loadBtn.visibility = View.VISIBLE
         loadBtn.text = if (modelLoaded) "Unload" else "Load"
