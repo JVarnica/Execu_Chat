@@ -34,8 +34,9 @@ import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.channels.NonReadableChannelException
-
+import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -61,12 +62,18 @@ class MainActivity : AppCompatActivity() {
     private var selectedBackend: BackendType = BackendType.XNNPACK
 
     @Volatile private var llmModule: LlmModule? = null
-    @Volatile private var lastUiUpdateMs = 0L
-    private var userSystemPrompt: String = ChatFormatter.DEFAULT_SYS_PROMPT
-    private var shouldAddSysPrompt = true
+    private var whisperAsr: AsrModule? = null
+    private var whisperLoaded: Boolean = false
+    // Audio recording for Whisper
     private var modelLoaded = false
     private var isGenerating = false
     private var needsPrefill = true
+    private var isRecording = false
+    private var isTranscribing: Boolean = false
+    @Volatile private var lastUiUpdateMs = 0L
+    private var userSystemPrompt: String = ChatFormatter.DEFAULT_SYS_PROMPT
+    private var shouldAddSysPrompt = true
+
     private var currentChatId: String? = null
     private var selectedImageUri: Uri? = null
 
@@ -74,13 +81,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var session: ChatSession
     //asr whisper
-    private var whisperAsr: AsrModule? = null
-    private var whisperLoaded: Boolean = false
-    // Audio recording for Whisper
-    private val asrLock = Any()
+
     private val asrRaw = StringBuilder(4096)
     private var audioRecord: AudioRecord? = null
-    private var isRecording = false
+
     private var recordingThread: Thread? = null
     private val audioHandler = Handler(Looper.getMainLooper())
     private val recordDurationMs = 5000L
@@ -93,11 +97,13 @@ class MainActivity : AppCompatActivity() {
     }
     private val pcmCollector = ByteArrayOutputStream()
 
-    private val WHISPER_PREPROC_ASSET = "whisper_preprocess.pte"
-    private val WHISPER_MODEL_ASSET = "whisper-small-fp32.pte"
-    private val WHISPER_TOKENIZER_ASSET = "wtokenizer.json"
+    private val WHISPER_PREPROC_ASSET = "whisper_preprocessor1.pte"
+    private val WHISPER_MODEL_ASSET = "whisper-tiny1.pte"
+    private val WHISPER_TOKENIZER_ASSET = "whisper-tokenizer.json"
 
     private var currModelConfig: ModelConfig = ModelConfigs.ALL.first { it.modelType == ModelType.LLAMA_3 }
+
+    private val executorchExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     // Permission launcher
     private val reqRecordAudio = registerForActivityResult(
@@ -302,7 +308,7 @@ class MainActivity : AppCompatActivity() {
     private fun loadModel() {
         gateUi(loaded = false, busy = true)
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        executorchExecutor.submit {
             try {
                 val modelsDir = AssetMover.getModelsDirectory(this@MainActivity)
                 val modelPath = File(modelsDir, currModelConfig.modelFileName).absolutePath
@@ -311,7 +317,7 @@ class MainActivity : AppCompatActivity() {
 
                 //check if in external storage
                 if (!File(modelPath).exists()) {
-                    withContext(Dispatchers.Main) {
+                    runOnUiThread {
                         toast("Copying ${currModelConfig.modelFileName} from assets")
                     }
                     try {
@@ -327,7 +333,7 @@ class MainActivity : AppCompatActivity() {
                     Log.d("MainActivity", "Model already exists: $modelPath")
                 }
                 if (!File(tokenizerPath).exists()) {
-                    withContext(Dispatchers.Main) {
+                    runOnUiThread {
                         toast("Copying tokenizer from assets...")
                     }
                     AssetMover.copyAssetToModelsDir(this@MainActivity, currModelConfig.tokenizerFileName)
@@ -344,9 +350,10 @@ class MainActivity : AppCompatActivity() {
                 Log.d("MainActivity", "Loading model: ${File(modelPath).length() / (1024*1024)}MB")
                 Log.d("MainActivity", "Loading tokenizer: ${File(tokenizerPath).length() / 1024}KB")
 
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Loading ${currModelConfig.displayName}...")
                 }
+
                 val module = LlmModule(
                     currModelConfig.modelType.getModelType(),
                     modelPath,
@@ -366,7 +373,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 llmModule = module
 
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Model loaded successfully")
                     modelLoaded = true
                     gateUi(loaded = true, busy = false)
@@ -375,7 +382,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Model load failed", e)
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Failed to load model: ${e.message}")
                     gateUi(loaded = false, busy = false)
                 }
@@ -434,7 +441,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun stopGen() {
-        llmModule?.stop()
+        executorchExecutor.submit {
+            llmModule?.stop()
+        }
         updateSendBtnState(false)
         toast("Generation Stopped!!")
         Log.d("MainActivity", "Generation stopped!")
@@ -443,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         toast("Processing Image...")
         val imageUri = selectedImageUri!!
         gateUi(loaded = true, busy = true)
-        lifecycleScope.launch(Dispatchers.IO) {
+        executorchExecutor.submit {
             try {
                 val etImage = ETImage(contentResolver, imageUri, 336)
 
@@ -456,12 +465,12 @@ class MainActivity : AppCompatActivity() {
                 )
                 selectedImageUri = null
                 Log.d("MainActivity", "Image prefilled for ${currModelConfig.modelType}")
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Processing Image!!")
                     gateUi(loaded = true, busy = false)
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Image prefill failed: ${e.message}")
                     gateUi(loaded = true, busy = false)
                 }
@@ -515,7 +524,7 @@ class MainActivity : AppCompatActivity() {
         val responseBuilder = StringBuilder()
         gateUi(loaded = true, busy = true)
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        executorchExecutor.submit {
             try {
                 //Handle both image and non-image pipeline
 
@@ -582,7 +591,7 @@ class MainActivity : AppCompatActivity() {
                 val finalText = responseBuilder.toString().trim()
                 Log.d("GENERATE", "Generate returned: '$finalText'")  // ✅ Debug log
 
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     updateSendBtnState(false)
                     gateUi(loaded = true, busy = false)
                     if (finalText.isNotEmpty()) {
@@ -599,7 +608,7 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "Generation failed", e)
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     updateSendBtnState(false)
                     gateUi(loaded = true, busy = false)
                     toast("Generation failed: ${e.message}")
@@ -722,17 +731,26 @@ class MainActivity : AppCompatActivity() {
             gateUi(loaded = true, busy = true)
             toast("Loading Whisper model...")
 
-            lifecycleScope.launch(Dispatchers.IO) {
-                val success = loadWhisperModules()
-                withContext(Dispatchers.Main) {
-                    gateUi(loaded = true, busy = false)
-                    if (success) {
-                        toast("Whisper loaded. Tap mic to record!")
-                        startRecording()
-                    } else {
-                        toast("Failed to load Whisper modules")
-                    }
-                }
+            executorchExecutor.submit {
+               try {
+                   val success = loadWhisperModules()
+                   runOnUiThread {
+                       if (success) {
+                           gateUi(loaded = true, busy = false)
+                           toast("Whisper loaded. Tap mic to record!")
+                           startRecording()
+                       } else {
+                           toast("Failed to load Whisper modules")
+                           gateUi(loaded = true, busy = false)
+                       }
+                   }
+               } catch (e: Exception) {
+                   Log.e("asr", "Failed to load Whisper", e)
+                   runOnUiThread {
+                       gateUi(loaded = true, busy = false)
+                       toast("Whisper load error: ${e.message}")
+                   }
+               }
             }
         } else {
             // Toggle recording
@@ -746,7 +764,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun loadWhisperModules(): Boolean = withContext(Dispatchers.IO) {
+    private fun loadWhisperModules(): Boolean {
         try {
             val modelsDir = AssetMover.getModelsDirectory(this@MainActivity)
 
@@ -756,7 +774,7 @@ class MainActivity : AppCompatActivity() {
 
             // Copy preprocessor from assets if not exists
             if (!File(preprocPath).exists()) {
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Copying Whisper preprocessor from assets...")
                 }
                 try {
@@ -764,7 +782,7 @@ class MainActivity : AppCompatActivity() {
                     Log.d("ASR", "✓ Preprocessor copied from assets")
                 } catch (e: Exception) {
                     Log.e("ASR", "Failed to copy preprocessor: ${e.message}")
-                    return@withContext false
+                    return false
                 }
             } else {
                 Log.d("ASR", "Preprocessor already exists: $preprocPath")
@@ -772,7 +790,7 @@ class MainActivity : AppCompatActivity() {
 
             // Copy model from assets if not exists
             if (!File(modelPath).exists()) {
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Copying Whisper model from assets...")
                 }
                 try {
@@ -780,14 +798,14 @@ class MainActivity : AppCompatActivity() {
                     Log.d("ASR", "✓ Whisper model copied from assets")
                 } catch (e: Exception) {
                     Log.e("ASR", "Failed to copy model: ${e.message}")
-                    return@withContext false
+                    return false
                 }
             } else {
                 Log.d("ASR", "Whisper model already exists: $modelPath")
             }
             // Copy tokenizer from assets if not exists
             if (!File(tokenizerPath).exists()) {
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Copying Whisper tokenizer from assets...")
                 }
                 try {
@@ -795,7 +813,7 @@ class MainActivity : AppCompatActivity() {
                     Log.d("ASR", "✓ Whisper tokenizer copied from assets")
                 } catch (e: Exception) {
                     Log.e("ASR", "Failed to copy tokenizer: ${e.message}")
-                    return@withContext false
+                    return false
                 }
             } else {
                 Log.d("ASR", "Whisper tokenizer already exists: $modelPath")
@@ -818,37 +836,45 @@ class MainActivity : AppCompatActivity() {
 
             if (!preprocFile.exists() || preprocFile.length() == 0L) {
                 Log.e("ASR", "Preprocessor file missing or empty")
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Whisper preprocessor file not found")
                 }
-                return@withContext false
+                return false
             }
             if (!modelFile.exists() || modelFile.length() == 0L) {
                 Log.e("ASR", "Model file missing or empty")
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Whisper model file not found")
                 }
-                return@withContext false
+                return false
             }
             if (!tokenizerFile.exists() || tokenizerFile.length() == 0L) {
                 Log.e("ASR", "Tokenizer file missing or empty")
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
                     toast("Whisper tokenizer file not found")
                 }
-                return@withContext false
+                return false
             }
 
-            whisperAsr = AsrModule(modelPath, tokenizerPath, dataPath = null, preprocPath)
+            val asr = AsrModule(modelPath, tokenizerPath, dataPath = null, preprocPath)
+            val loadResult = asr.load()
+            if (loadResult != 0) {
+                Log.e("ASR", "AsrModule.load() failed: $loadResult")
+                runOnUiThread {
+                    toast("Whisper load failed: error $loadResult")
+                }
+                return false
+            }
+            whisperAsr = asr
             whisperLoaded = true
             Log.d("ASR", "Whisper modules loaded successfully")
-            true
+            return true
         } catch (t: Throwable) {
             Log.e("ASR", "Failed to load Whisper modules", t)
             whisperLoaded = false
-            false
+            return false
         }
     }
-
     private fun startRecording() {
         Log.d("ASR", "startRecording() called")
         if (ContextCompat.checkSelfPermission(
@@ -919,6 +945,7 @@ class MainActivity : AppCompatActivity() {
             Log.d("ASR", "Not recording, nothing to stop.")
             return
         }
+        // stop recording
         isRecording = false
 
         try {
@@ -934,22 +961,26 @@ class MainActivity : AppCompatActivity() {
             toast("No audio captured")
             return
         }
-
+        //UI transribing
+        isTranscribing = true
         gateUi(loaded = true, busy = true)
-        lifecycleScope.launch(Dispatchers.IO) {
+        executorchExecutor.submit {
             try {
                 val wavFile = File(cacheDir, "whisper_recording.wav")
                 writeWav16kMonoPcm16(audioBytes, wavFile)
                 val transcription = transcribeWavFile(wavFile)
-                withContext(Dispatchers.Main) {
+                Log.d("ASR", "Transcription: $transcription")
+
+                runOnUiThread {
+                    isTranscribing = false
                     gateUi(loaded = true, busy = false)
-                    Log.d("ASR", "Transcription: $transcription")
-                    input.setText(transcription)
-                    input.setSelection(transcription.length)
+                    input.setText(transcription.takeIf { it.isNotBlank() } ?: "")
+                    input.setSelection(input.text.length)
                 }
             } catch (t: Throwable) {
                 Log.e("ASR", "Whisper run failed", t)
-                withContext(Dispatchers.Main) {
+                runOnUiThread {
+                    isTranscribing = false
                     gateUi(loaded = true, busy = false)
                     toast("Whisper error: ${t.message}")
                 }
@@ -994,25 +1025,29 @@ class MainActivity : AppCompatActivity() {
         s = s.replace(Regex("\\s+"), " ").trim()
         return s
     }
-    private suspend fun transcribeWavFile(wavFile: File): String = withContext(Dispatchers.IO) {
+    private fun transcribeWavFile(wavFile: File): String {
         val asr = whisperAsr ?: error("Whisper not loaded")
-        synchronized(asrLock) { asrRaw.setLength(0) }
+        if (!whisperLoaded) {
+            Log.e("ASR", "whisperLoaded flag is false!")
+            throw IllegalStateException("Whisper not loaded")
+        }
+
         val cb = object : AsrCallback {
             override fun onToken(token: String) {
-                synchronized(asrLock) { asrRaw.append(token) }
+                asrRaw.append(token)
             }
         }
         asr.transcribe(wavFile.absolutePath, callback = cb)
-        val raw = synchronized(asrLock) { asrRaw.toString() }
-        cleanWhisperText(raw)
+        val raw = asrRaw.toString()
+        return cleanWhisperText(raw)
     }
     private fun gateUi(loaded: Boolean, busy: Boolean, listening: Boolean = false) {
         loadBtn.visibility = View.VISIBLE
-        loadBtn.text = if (loaded) "Unload" else "Load"
+        loadBtn.text = if (modelLoaded) "Unload" else "Load"
         loadBtn.isEnabled = !busy
         sendBtn.visibility = View.VISIBLE
         progress.visibility = if (busy) View.VISIBLE else View.GONE
-        input.isEnabled = loaded && !busy && !isGenerating
+        input.isEnabled = loaded && !busy && !isGenerating && !isTranscribing
         sendBtn.isEnabled = loaded && (!busy || isGenerating)
         newChatBtn.isEnabled = !busy
         saveBtn.isEnabled = !busy
