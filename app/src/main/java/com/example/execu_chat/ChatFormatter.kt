@@ -68,8 +68,11 @@ object ChatFormatter {
             }
         }
     }
+    fun buildFullPrompt(modelType: ModelType, messages: List<ChatMessage>): String {
+        return buildFullPromptFromTurns(modelType, messages.map { it.toTurn() })
+    }
 
-    fun buildFullPrompt(modelType: ModelType, turns: List<Turn>): String {
+    fun buildFullPromptFromTurns(modelType: ModelType, turns: List<Turn>): String {
         val sb = StringBuilder()
 
         // Add begin token for Llama-3

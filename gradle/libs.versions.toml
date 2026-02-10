@@ -46,8 +46,7 @@ vosk-android = { module = "com.alphacephei:vosk-android", version.ref = "vosk" }
 facebook-fbjni = { group = "com.facebook.fbjni", name = "fbjni", version.ref = "fbjni"}
 facebook-nativeloader = { group = "com.facebook.soloader", name = "nativeloader", version.ref = "nativeloader"}
 facebook-soloader = { group = "com.facebook.soloader", name = "soloader", version.ref= "soloader" }
-#executorch-xnnpack = { group = "org.pytorch", name = "executorch-android", version.ref = "executorch-xnnpack" }
-executorch-vulkan = { group = "org.pytorch", name = "executorch-android-vulkan", version.ref = "executorch-vulkan"}
+#executorch-vulkan = { group = "org.pytorch", name = "executorch-android-vulkan", version.ref = "executorch-vulkan"}
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

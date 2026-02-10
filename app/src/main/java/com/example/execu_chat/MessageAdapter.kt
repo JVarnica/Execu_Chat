@@ -9,17 +9,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 
-data class Message(
-    val text: String,
-    val isUser: Boolean,
-    val timestamp: Long = System.currentTimeMillis()
-)
-
 class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() {
 
-    private val items = mutableListOf<Message>()
+    private val items = mutableListOf<ChatMessage>()
 
-    fun setItems(newItems: List<Message>) {
+    fun setItems(newItems: List<ChatMessage>) {
         val oldSize = items.size
         items.clear()
         items.addAll(newItems)
@@ -50,20 +44,20 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
         }
 
     }
-    fun updateItem(index: Int, newItem: Message) {
+    fun updateItem(index: Int, newItem: ChatMessage) {
         if (index in items.indices) {
             items[index] = newItem
             notifyItemChanged(index)
         }
     }
-    fun addItemAndReturnIndex(item: Message): Int {
+    fun addItemAndReturnIndex(item: ChatMessage): Int {
         items.add(item)
         val idx = items.lastIndex
         notifyItemInserted(idx)
         return idx
     }
 
-    fun addItem(item: Message) {
+    fun addItem(item: ChatMessage) {
         items.add(item)
         notifyItemInserted(items.lastIndex)
     }
@@ -90,7 +84,7 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
         private val messageText: TextView = itemView.findViewById(R.id.messageText)
         private val messageContainer: LinearLayout = itemView.findViewById(R.id.messageContainer)
 
-        fun bind(message: Message) {
+        fun bind(message: ChatMessage) {
             messageText.text = message.text
             val lp = messageContainer.layoutParams as FrameLayout.LayoutParams
             lp.gravity = if (message.isUser) Gravity.END else Gravity.START
@@ -104,6 +98,7 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
                 messageContainer.setBackgroundResource(R.drawable.bg_message_assistant)
                 messageText.setTextColor(0xFF000000.toInt())
             }
+            messageContainer.layoutParams = lp
         }
     }
 }
