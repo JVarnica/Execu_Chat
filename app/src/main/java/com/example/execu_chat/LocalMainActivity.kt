@@ -30,7 +30,7 @@ import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
 import androidx.activity.viewModels
 
-class MainActivity : AppCompatActivity() {
+class LocalChatActivity : AppCompatActivity() {
 
 
     private val viewModel: MainViewModel by viewModels()
@@ -158,7 +158,7 @@ class MainActivity : AppCompatActivity() {
         //setup recyclerview
         messageAdapter = MessageAdapter()
         messagesRecyclerView.apply {
-            layoutManager = LinearLayoutManager(this@MainActivity)
+            layoutManager = LinearLayoutManager(this@LocalChatActivity)
             adapter = messageAdapter
         }
 
@@ -562,5 +562,3 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 }
-
-

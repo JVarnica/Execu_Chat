@@ -9,16 +9,22 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.ExecuChat">
+        android:theme="@style/Theme.ExecuChat"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
-            android:name=".MainActivity"
+            android:name=".WelcomeActivity"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-
             </intent-filter>
         </activity>
+
+        <activity android:name=".LocalChatActivity"
+            android:exported="false" />
+
+        <activity android:name=".CloudChatActivity"
+            android:exported="false" />
     </application>
 </manifest>

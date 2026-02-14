@@ -12,10 +12,11 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
         android:layout_marginEnd="8dp"
-        android:maxWidth="280dp"
+        android:maxWidth="320dp"
         android:orientation="vertical"
         android:padding="12dp">
 
+        <!-- Main message text -->
         <TextView
             android:id="@+id/messageText"
             android:layout_width="wrap_content"
@@ -23,6 +24,42 @@
             android:textColor="@android:color/white"
             android:textSize="16sp"
             android:lineSpacingExtra="2dp"/>
+
+        <!-- Thinking section (only for assistant messages) -->
+        <LinearLayout
+            android:id="@+id/thinkingSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginTop="8dp">
+
+            <!-- Toggle button -->
+            <TextView
+                android:id="@+id/thinkingToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🧠 Show reasoning"
+                android:textSize="12sp"
+                android:textStyle="italic"
+                android:padding="4dp"
+                android:background="?attr/selectableItemBackground"
+                android:textColor="#888888"/>
+
+            <!-- Thinking content (collapsible) -->
+            <TextView
+                android:id="@+id/thinkingContent"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:padding="8dp"
+                android:background="#F5F5F5"
+                android:textSize="13sp"
+                android:textColor="#555555"
+                android:fontFamily="monospace"
+                android:visibility="gone"/>
+
+        </LinearLayout>
 
     </LinearLayout>
 </FrameLayout>
