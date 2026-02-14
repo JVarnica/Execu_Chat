@@ -16,4 +16,4 @@ local.properties
 /app/src/main/assets/
 /app/libs/
 /app/src/main/java/com/example/execu_chat/ServerConfig.kt
-
+/app/src/main/res/xml/network_security_config.xml
