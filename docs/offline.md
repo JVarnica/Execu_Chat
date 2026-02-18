@@ -6,9 +6,9 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
 
 ### DEMO
 
-![Llama3.2-3B-8da4w-Vulkan](./docs/llama3B-Vulkan.gif)
+![Llama3.2-3B-8da4w-Vulkan](docs/llama3B-Vulkan.gif)
 
-![Llama3.2-3B-8da4w-Xnnpack](./docs/llama3B-XNNPACK.gif)
+![Llama3.2-3B-8da4w-Xnnpack](docs/llama3B-XNNPACK.gif)
 
 ### Metrics on Galaxy Z-Fold7
 

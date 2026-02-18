@@ -5,8 +5,8 @@ or **online** through a self-hosted vLLM server with web search and deep researc
 
 ### Architecture Overview
 
-[Execu Chat architecture](docs/execu_chat_arc.png)
-[Execu Chat welcome](docs/execu_arc_home.jpeg)
+![Execu Chat architecture](docs/execu_chat_arc.png)
+![Execu Chat welcome](docs/execu_arc_home.jpeg)
 
 ### Offline Mode
 
