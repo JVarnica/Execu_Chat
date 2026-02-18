@@ -3,10 +3,12 @@
 A dual-mode Android AI assistant that runs **fully offline** with on-device inference via ExecuTorch, 
 or **online** through a self-hosted vLLM server with web search and deep research capabilities.
 
-### Architecture Overview
+<h3>Architecture Overview</h3>
 
-![Execu Chat architecture](docs/execu_chat_arc.png)
-![Execu Chat welcome](docs/execu_arc_home.jpeg)
+<p float="left">
+  <img src="docs/execu_chat_arc.png" width="520" alt="ExecuChat system architecture diagram" />
+  <img src="docs/execu_arc_home.jpeg" width="260" alt="ExecuChat Android app welcome screen" />
+</p>
 
 ### Offline Mode
 
@@ -22,7 +24,6 @@ On-device LLM inference — nothing leaves the phone.
 > 📖 [Why ExecuTorch, model export, backends & benchmarks →](docs/offline.md)
 
 ### Online Mode
-
 
 Cloud-powered inference via self-hosted docker stack with vLLM for model inference, searXNG for 
 search, and python/LangChain for deep-research. 6 services/containers all on same network

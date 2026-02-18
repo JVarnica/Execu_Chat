@@ -4,11 +4,12 @@ system, which is consistently getting maintained. Furthermore you can delegate t
 Vulkan is the backend of choice here as is used as an interface to communicate with android's gpus. 
 OFFLINE inference was the point- how well can a model run on a mobile phone and what size is the limit? 
 
-### DEMO
+<h3>DEMO</h3>
 
-![Llama3.2-3B-8da4w-Vulkan](docs/llama3B-Vulkan.gif)
-
-![Llama3.2-3B-8da4w-Xnnpack](docs/llama3B-XNNPACK.gif)
+<p>
+  <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" width="380" alt="Llama 3B Vulkan demo" />
+  <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" width="380" alt="Llama 3B XNNPACK demo" />
+</p>
 
 ### Metrics on Galaxy Z-Fold7
 
