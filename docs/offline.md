@@ -14,7 +14,7 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
   real-time performance metrics.
 </p>
 
-<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" width="640" alt="Llama 3B XNNPACK runtime demo" />
+<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" height="800" alt="Llama 3B XNNPACK runtime demo" />
 
 <br/><br/>
 
@@ -24,7 +24,7 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
   throughput and GPU utilisation.
 </p>
 
-<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" width="640" alt="Llama 3B Vulkan runtime demo" />
+<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" height="800" alt="Llama 3B Vulkan runtime demo" />
 
 ### Metrics on Galaxy Z-Fold7
 
