@@ -1,4 +1,6 @@
 package com.example.execu_chat
+//methods for assets movement. can't keep diff models in assets, needs to be in app storage.
+//some suspend as can be used in coroutine and some not as those being used in executor
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers

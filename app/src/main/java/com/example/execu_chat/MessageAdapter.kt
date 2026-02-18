@@ -1,3 +1,7 @@
+//Message adapter
+// Turns data into UI- tells how many messages got, how to show on UI, all UI logic of chat messages show here.
+// Tell it to use markdown
+
 package com.example.execu_chat
 
 import android.view.Gravity

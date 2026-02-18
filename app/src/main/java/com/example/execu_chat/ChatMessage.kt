@@ -38,7 +38,6 @@ data class ChatMessage(
                 else -> null
             }
         }
-
         // Extract thinking and clean content from raw text
         fun extractCleanContent(rawText: String): Pair<String?, String> {
             val thinkingRegex = "<think>(.*?)</think>".toRegex(RegexOption.DOT_MATCHES_ALL)
@@ -53,6 +52,22 @@ data class ChatMessage(
                 .trim()
 
             return Pair(thinking, cleanContent)
+        }
+        /**
+         * Extract just the thinking summary (model-generated).
+         * Falls back to first 80 chars if no summary found.
+         */
+        fun extractThinkingSummary(rawText: String): String? {
+            // First extract the thinking block
+            val thinkingRegex = "<think>(.*?)</think>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val thinkingMatch = thinkingRegex.find(rawText) ?: return null
+            val thinking = thinkingMatch.groupValues[1]
+
+            // Then extract summary from within thinking
+            val summaryRegex = "<summary>(.*?)</summary>".toRegex(RegexOption.DOT_MATCHES_ALL)
+            val summaryMatch = summaryRegex.find(thinking)
+
+            return summaryMatch?.groupValues?.get(1)?.trim()
         }
     }
 }

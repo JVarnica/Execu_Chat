@@ -38,6 +38,29 @@ class CloudChatViewModel : ViewModel() {
     private val searchClient = SearchClient(
         baseUrl = ServerConfig.SEARCH_BASE_URL
     )
+    private val THINKING_SYSTEM_PROMPT = """
+    You are a helpful AI assistant. When reasoning through problems, use the following format:
+    
+    <think>
+    [Your detailed reasoning here]
+    
+    <summary>One sentence summarizing your key insight or approach</summary>
+    </think>
+    
+    Your actual response here.
+    
+    Example:
+    <think>
+    The user is asking about Paris. I need to provide the capital of France.
+    France is a European country. Paris is both the capital and largest city.
+    I should be direct and accurate.
+    
+    <summary>Straightforward geography question - provide capital of France</summary>
+    </think>
+    Paris is the capital and largest city of France.
+    
+    Always include the <summary> tag at the END of your thinking, right before </think>.
+    """.trimIndent()
     private val researchClient = DeepResearchClient(baseUrl = ServerConfig.RESEARCH_BASE_URL)
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -82,7 +105,13 @@ class CloudChatViewModel : ViewModel() {
             val responseText = StringBuilder()
             try {
                 // Messages for API (without the empty placeholder)
-                var messagesForApi = currentMessages.dropLast(1)
+                var messagesForApi = currentMessages.dropLast(1).map { prepareMessageForContext(it) }
+
+                // ADD system message with thinking instructions
+                val systemMsg = ChatMessage(
+                    ChatMessage.Role.System,
+                    THINKING_SYSTEM_PROMPT
+                )
 
                 if (enableSearch) {
                     val searchResults = searchClient.search(text)
@@ -91,10 +120,14 @@ class CloudChatViewModel : ViewModel() {
                         val searchMessage = ChatMessage(
                             ChatMessage.Role.System,
                             searchContext)
-                        messagesForApi = listOf(searchMessage) + messagesForApi
+                        messagesForApi = listOf(systemMsg, searchMessage) + messagesForApi
+                    } else {
+                        messagesForApi = listOf(systemMsg) + messagesForApi
                     }
-
+                } else {
+                    messagesForApi = listOf(systemMsg) + messagesForApi
                 }
+                Log.d("vllm_prompt", "$messagesForApi")
                 vllm.streamChatCompletion(
                     messages = messagesForApi,
                     onDelta = { chunk ->
@@ -234,6 +267,31 @@ class CloudChatViewModel : ViewModel() {
                 Log.d("RESEARCH", "Done, isResearching=false")
             }
         }
+    }
+
+    private fun prepareMessageForContext(msg: ChatMessage): ChatMessage {
+        if (msg.role != ChatMessage.Role.Assistant) {
+            return msg
+        }
+
+        val (thinking, content) = ChatMessage.extractCleanContent(msg.text)
+
+        if (thinking == null) {
+            return ChatMessage(msg.role, content, null, msg.timestamp)
+        }
+
+        // Try to get model's own summary
+        val summary = ChatMessage.extractThinkingSummary(msg.text)
+
+        val condensedText = if (summary != null) {
+            // Use model's summary
+            "[Previous reasoning: $summary]\n\n$content"
+        } else {
+            // Fallback: just use content without thinking
+            content
+        }
+
+        return ChatMessage(msg.role, condensedText, null, msg.timestamp)
     }
     fun cancelDeepResearch() {
         researchJob?.cancel()

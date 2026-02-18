@@ -1,79 +1,49 @@
-##Execu_Chat - Chat with an LLM offline on-device
+# ExecuChat
 
-Execu_Chat is an on-device android app which runs LLMs using Executorch (wanted to keep Pytorch native, has kv_cache optimizations, and vulkan backend to use phone gpu). 
-OFFLINE inference was the point- how well can a model run on a mobile phone and what size can it go up to? 
-It can run llava so has vision and has speech to text using whisper. 
+A dual-mode Android AI assistant that runs **fully offline** with on-device inference via ExecuTorch, 
+or **online** through a self-hosted vLLM server with web search and deep research capabilities.
 
-To use the models for inference you need to create an executorch program, 
-- first step is to export with torch.export() to get the Intermediate representation so you have the operator list, and model is deterministic.
-- Then you delegate/lower the program to your desired backend, optimizing the model for this backend. 
+### Architecture Overview
 
-This is rather complicated for a LLM which is why the Executorch team have created an export script, export_llm which makes this simple. 
-For more information read the llama ReadMe https://github.com/pytorch/executorch/tree/main/examples/models/llama
+[Execu Chat architecture](docs/execu_chat_arc.png)
+[Execu Chat welcome](docs/execu_arc_home.jpeg)
 
-The main model is Llama3.2-3B-QLORA-8da4w from executorch community as already quantized so more accurate than quantizing to int4 with qmode and don't need to bother with calibration data for p2te. qmode models 
-still work fine though will use for qwen for example. 
+### Offline Mode
 
-### The export script 
+On-device LLM inference — nothing leaves the phone.
 
-python -m executorch.examples.models.llama.export_llama \
---model "llama3_2" \
---checkpoint /home/julien/Documents/Juju/llm_ft/llama3B_QLORA4W/consolidated.00.pth \
---params /home/julien/Documents/Juju/llm_ft/llama3B_QLORA4W/params.json \
--qat \ #whether checkpoint pre-quantized using qat
--lora 16 \ #rank of lora adaptors. 0 is none which is default
---preq_mode 8da4w_output_8da8w \ #quantization mode for pre-quantized checkpoint
---preq_group_size 32 \ #group size pre-quantized checkpoint
---preq_embedding_quantize 8,0 \ #pre embedding quantize '<bitwidth>,<groupsize>'
---use_sdpa_with_kv_cache \ # whether to use spda_with_kv_cache op when kv on
--kv \ # kv_cache
--vulkan \ # vulkan backend
--d fp32 \ #dtype 
---max_seq_length 1024 \
---max_context_length 2048 \
---output_name "Llama3B-QLORA_8da4wV.pte" \
---metadata '{"get_bos_id":128000, "get_eos_ids":[128009, 128001]}'
+- Run Executorch program on phone- llama, qwen, llava, etc
+- Has internal kv_cache management (remembers)
+- Whisper speech-to-text (asr)
+- Image Q&A with multimodal models (LLaVA)
+- XNNPACK and Vulkan backend options
+- Custom system prompts, generation stats, memory monitoring
 
-As it is pre-quantized need to it what to expect and how the checkpoint has been quantized, if not pre-quantized don't include the params. 
-This creates a .pte file called Llama3B-QLORA-8da4wV, with a size of 2.81GB. Which is small enough to run on any phone with 8gb RAM. More details
-on the benchmarks between models on galaxy flipz7 (12gb RAM) and galaxy24 (8gb RAM) for vulkan and xnnpack backends. 
+> 📖 [Why ExecuTorch, model export, backends & benchmarks →](docs/offline.md)
 
-Another important thing to note when exporting is you can also put args in a yaml file. This is the code snippet to export qwen3. You use the preset config
-for the params so you pick whether 0.6b, 1.7b and 4b config for whichever model you are using.  One thing to note is if you are exporting llama you have
-to provide the checkpoint, for others such as qwen you don't need to.
-
-python -m extension.llm.export.export_llm \
---config /home/julien/Documents/Juju/qwen3_4B/qwen3_4b8da4w.yaml \
-+base.model_class="qwen3_4b" \
-+base.params="/home/julien/Documents/Juju/qwen3_4B/4b_config.json" \
-+export.output_name="/home/julien/Documents/Juju/qwen3_4B/qwen3_4b_xxnpack.pte"
-
-qwen3_4b8da4w.yaml
-base:
-    metadata: '{"get_bos_id": 151644, "get_eos_ids":[151645]}'
-model:
-    use_kv_cache: True
-    use_sdpa_with_kv_cache: True
-    dtype_override: fp32
-quantization:
-    qmode: 8da4w
-export:
-    max_seq_length: 1024
-    max_context_length: 2048
-backend:
-    xnnpack:
-        enabled: True
-        extended_ops: True
-
-###Backends
-
-Due to export difficulties only llama has been exported to vulkan the rest remain on xnnpack for time being, the error which occurs when trying to export qwen with vulkan
-is: raise SpecViolationError(
-torch._export.verifier.SpecViolationError: Mutation node _local_scalar_dense_104 is neither a buffer nor a user input. Buffers to mutate: {'getitem_550': 'layers.34.attention.kv_cache.k_cache', 'getitem_551': 'layers.34.attention.kv_cache.v_cache'}, User inputs to mutate: {}
-
-You get this same SpecViolationError error when exporting llava, meaning the vulkan partitioner is more strict doesn't work with executorch-1.0.1.
+### Online Mode
 
 
+Cloud-powered inference via self-hosted docker stack with vLLM for model inference, searXNG for 
+search, and python/LangChain for deep-research. 6 services/containers all on same network
 
+- **vLLM** serve hf models on gpu, OpenAI-API
+- **searcXNG** privacy metasearch engine, JSON API
+- **Python** to run LangChain, as fast-api for sse progress
+- **Prometheus** for live metric collection
+- **gratana** for monitoring dashboards
+- **Redis** Task queue & caching for research agent
+
+> 📖 [Server setup, Docker Compose & configuration →](docs/online.md)
+>
+> 📖 [How the deep research agent works →](docs/deep-research.md)
+
+
+### Prerequisites
+
+- This setup is with Linux Ubuntu 24
+- Android device with 8gb+ RAM (12+gb to run Llava) OFFLINE MODE
+- NVIDIA GPU with 16GB+ VRAM ONLINE MODE
+- Docker & Docker Compose
 
 

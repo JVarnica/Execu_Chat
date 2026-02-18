@@ -1,4 +1,5 @@
 package com.example.execu_chat
+//Cloud mainactivity all UI logic. Calls viewModel.
 
 import android.graphics.PorterDuff
 import android.view.Gravity
@@ -61,7 +62,7 @@ class CloudChatActivity : AppCompatActivity() {
 
         // Initialize ViewModel
         viewModel = ViewModelProvider(this)[CloudChatViewModel::class.java]
-
+        // initialize buttons
         drawerLayout = findViewById(R.id.drawer_layout2)
         recyclerView = findViewById(R.id.messagesRecyclerView)
         input = findViewById(R.id.input)

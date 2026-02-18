@@ -406,18 +406,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     override fun onStats(stats: String) {
                         try {
                             val j = JSONObject(stats)
-                            var tps: Double = 0.0
 
+                            val promptTokens = j.optLong("prompt_tokens")
                             val numGeneratedTokens = j.optLong("generated_tokens")
+                            val inferenceStartMs = j.optLong("inference_start_ms")
                             val inferenceEndMs = j.optLong("inference_end_ms")
                             val promptEvalEndMs = j.optLong("prompt_eval_end_ms")
-                            val decodeTime = (inferenceEndMs - promptEvalEndMs).toDouble()
-                            tps = (numGeneratedTokens.toDouble() / decodeTime) * 1000
+                            val firstTokenMs = j.optLong("first_token_ms")
+
+                            //Decode: Tokens/s
+                            val decodeMs = (inferenceEndMs - promptEvalEndMs).toDouble()
+                            val decodeTps = (numGeneratedTokens.toDouble() / decodeMs) * 1000
+
+                            //TTFT: first token time from inference start
+                            val ttftMs = firstTokenMs - inferenceStartMs
+                            val ttftSec = ttftMs / 1000.0
+
+                            //Prefill: Tokens/s
+                            val prefillMs = (promptEvalEndMs - inferenceStartMs).toDouble()
+                            val prefillTps = (promptTokens.toDouble() / prefillMs) * 1000
 
                             val line = buildString {
                                 append("$numGeneratedTokens tok . ")
-                                append(String.format("%.2f tok/s", tps))
-                                append(" . decode ${decodeTime}ms")
+                                append("${String.format("%.1f", decodeTps)} tok/s")
+                                append(" · ${String.format("%.1f", ttftSec)}s TTFT")
+                                append(" · ${String.format("%.1f", prefillTps)} prefill tok/s")
+                            }
+                            // Optional: GPU stats for Vulkan comparison
+                            val gpuPeak = j.optDouble("gpu_peak_usage_mb", -1.0)
+                            if (gpuPeak >= 0) {
+                                line + " · GPU: ${String.format("%.0f", gpuPeak)}MB"
                             }
                             postUiUpdate {
                                 _uiState.value = _uiState.value.copy(
@@ -584,7 +602,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
     }
-
     //asr
     fun transcribeAudio(wavFile: File, onComplete: (String) -> Unit) {
         val asr = whisperAsr ?: run {
