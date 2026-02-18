@@ -6,10 +6,22 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
 
 <h3>DEMO</h3>
 
-<p>
-  <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" width="380" alt="Llama 3B Vulkan demo" />
-  <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" width="380" alt="Llama 3B XNNPACK demo" />
-</p>
+<h3>Architecture Overview</h3>
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" width="520" alt="Llama 3B Vulkan demo" />
+      <br/>
+      <strong>Fig. 1.</strong> Llama3.2-3B xnnpack
+    </td>
+    <td align="center">
+      <img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" width="260" alt="Llama 3B XNNPACK demo" />
+      <br/>
+      <strong>Fig. 2.</strong> Llama3.2-3B Vulkan 
+    </td>
+  </tr>
+</table>
 
 ### Metrics on Galaxy Z-Fold7
 

@@ -5,10 +5,21 @@ or **online** through a self-hosted vLLM server with web search and deep researc
 
 <h3>Architecture Overview</h3>
 
-<p float="left">
-  <img src="docs/execu_chat_arc.png" width="520" alt="ExecuChat system architecture diagram" />
-  <img src="docs/execu_arc_home.jpeg" width="260" alt="ExecuChat Android app welcome screen" />
-</p>
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/execu_chat_arc.png" width="520" alt="ExecuChat system architecture diagram" />
+      <br/>
+      <strong>Fig. 1.</strong> ExecuChat system architecture 
+    </td>
+    <td align="center">
+      <img src="docs/execu_arc_home.jpeg" width="260" alt="ExecuChat Android welcome screen" />
+      <br/>
+      <strong>Fig. 2.</strong> App welcome screen allowing selection between 
+      local and cloud inference modes.
+    </td>
+  </tr>
+</table>
 
 ### Offline Mode
 
