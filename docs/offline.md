@@ -6,15 +6,13 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
 
 <h3>DEMO</h3>
 
-<h3>Architecture Overview</h3>
-
 <p>
   <strong>Fig. 3 — Llama-3B running with XNNPACK backend.</strong><br/>
   On-device inference using XNNPACK, showing token generation, throughput, and 
   real-time performance metrics.
 </p>
 
-<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" height="800" alt="Llama 3B XNNPACK runtime demo" />
+<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-XNNPACK.gif" height="700" alt="Llama 3B XNNPACK runtime demo" />
 
 <br/><br/>
 
@@ -24,7 +22,7 @@ OFFLINE inference was the point- how well can a model run on a mobile phone and 
   throughput and GPU utilisation.
 </p>
 
-<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" height="800" alt="Llama 3B Vulkan runtime demo" />
+<img src="https://raw.githubusercontent.com/JVarnica/Execu_Chat/main/docs/llama3B-Vulkan.gif" height="700" alt="Llama 3B Vulkan runtime demo" />
 
 ### Metrics on Galaxy Z-Fold7
 

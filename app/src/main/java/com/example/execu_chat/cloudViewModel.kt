@@ -347,16 +347,15 @@ class CloudChatViewModel : ViewModel() {
     private fun buildTranscript(messages: List<ChatMessage>): String {
         return messages.joinToString("\n") { msg ->
             val (_, cleanContent) = ChatMessage.extractCleanContent(msg.text)
-            val rolePrefix = when (msg.role) {
+            when (msg.role) {
                 ChatMessage.Role.User -> "User: ${cleanContent}"
                 ChatMessage.Role.Assistant -> "Assistant: ${cleanContent}"
                 ChatMessage.Role.System -> "System: ${cleanContent}"
             }
-            "$rolePrefix: $cleanContent"
         }
     }
     private fun parseTranscript(transcript: String): List<ChatMessage> {
-        return transcript.split("\n---MESSAGE---\n")
+        return transcript.split("\n")
             .mapNotNull { block ->
                 val trimmed = block.trim()
                 when {

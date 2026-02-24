@@ -15,8 +15,7 @@ or **online** through a self-hosted vLLM server with web search and deep researc
     <td align="center">
       <img src="docs/execu_arc_home.jpeg" width="260" alt="ExecuChat Android welcome screen" />
       <br/>
-      <strong>Fig. 2.</strong> App welcome screen allowing selection between 
-      local and cloud inference modes.
+      <strong>Fig. 2.</strong> App welcome screen 
     </td>
   </tr>
 </table>
@@ -47,9 +46,8 @@ search, and python/LangChain for deep-research. 6 services/containers all on sam
 - **Redis** Task queue & caching for research agent
 
 > 📖 [Server setup, Docker Compose & configuration →](docs/online.md)
->
-> 📖 [How the deep research agent works →](docs/deep-research.md)
 
+> 📖 [How the deep research agent works →](docs/deep-research.md)
 
 ### Prerequisites
 
@@ -57,5 +55,6 @@ search, and python/LangChain for deep-research. 6 services/containers all on sam
 - Android device with 8gb+ RAM (12+gb to run Llava) OFFLINE MODE
 - NVIDIA GPU with 16GB+ VRAM ONLINE MODE
 - Docker & Docker Compose
+
 
 
