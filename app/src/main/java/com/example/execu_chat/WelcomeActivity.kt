@@ -16,7 +16,7 @@ class WelcomeActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.CloudChatBtn).setOnClickListener {
-            startActivity(Intent(this, CloudChatActivity::class.java))
+            startActivity(Intent(this, LoginActivity::class.java))
         }
     }
 }

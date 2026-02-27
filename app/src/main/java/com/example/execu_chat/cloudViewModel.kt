@@ -1,8 +1,10 @@
 package com.example.execu_chat
 
+import android.app.Application
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -10,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -29,15 +32,18 @@ data class SourceItem(
     val snippet: String = ""
 )
 
-class CloudChatViewModel : ViewModel() {
+class CloudChatViewModel(application: Application) : AndroidViewModel(application) {
+    private val gateway = GatewayClient(getApplication(), ServerConfig.GATEWAY_URL)
     private val vllm = VllmClient(
-        baseUrl = ServerConfig.VLLM_BASE_URL,
-        defaultModel = ServerConfig.DEFAULT_MODEL,
-        apiKey = ServerConfig.VLLM_API_KEY
+       getApplication(),
+        ServerConfig.DEFAULT_MODEL,
+        ServerConfig.GATEWAY_URL,
     )
     private val searchClient = SearchClient(
-        baseUrl = ServerConfig.SEARCH_BASE_URL
+        context = getApplication(),
+        baseUrl = ServerConfig.GATEWAY_URL
     )
+    private val researchClient = DeepResearchClient(getApplication(), baseUrl = ServerConfig.GATEWAY_URL)
     private val THINKING_SYSTEM_PROMPT = """
     You are a helpful AI assistant. When reasoning through problems, use the following format:
     
@@ -61,7 +67,7 @@ class CloudChatViewModel : ViewModel() {
     
     Always include the <summary> tag at the END of your thinking, right before </think>.
     """.trimIndent()
-    private val researchClient = DeepResearchClient(baseUrl = ServerConfig.RESEARCH_BASE_URL)
+
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -71,6 +77,25 @@ class CloudChatViewModel : ViewModel() {
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+    private val _serverHealthy = MutableStateFlow(false)
+    val serverHealthy: StateFlow<Boolean> = _serverHealthy.asStateFlow()
+
+    init {
+        // Poll health every 30 seconds
+        viewModelScope.launch {
+            while (true) {
+                _serverHealthy.value = gateway.isHealthy()
+                delay(30_000)
+            }
+        }
+    }
+
+    /** Trigger an immediate health check (e.g. on resume). */
+    fun checkHealthNow() {
+        viewModelScope.launch {
+            _serverHealthy.value = gateway.isHealthy()
+        }
+    }
 
     // ── Research state (new) ─────────────────────────────────────────
     private val _isResearching = MutableStateFlow(false)
@@ -82,6 +107,8 @@ class CloudChatViewModel : ViewModel() {
     private var researchJob: Job? = null
     private var currentTaskId: String? = null
     private var currentChatId: String? = null
+
+    fun currentUserId(): String? = gateway.currentUserId()
 
     fun sendMessage(text: String, enableSearch: Boolean = false) {
         if (text.isBlank() || _isLoading.value) return
@@ -112,7 +139,6 @@ class CloudChatViewModel : ViewModel() {
                     ChatMessage.Role.System,
                     THINKING_SYSTEM_PROMPT
                 )
-
                 if (enableSearch) {
                     val searchResults = searchClient.search(text)
                     if (searchResults.isNotEmpty()) {

@@ -1,5 +1,6 @@
 package com.example.execu_chat
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -34,6 +35,7 @@ data class ResearchEvent(
 
 
 class DeepResearchClient(
+    private val context: Context,
     private val baseUrl: String
     ) {
         private val client = OkHttpClient.Builder()
@@ -67,6 +69,7 @@ class DeepResearchClient(
 
             val request = Request.Builder()
                 .url("$baseUrl/research")
+                .addHeader("Authorization", "Bearer ${TokenManager.accessToken(context)}")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 

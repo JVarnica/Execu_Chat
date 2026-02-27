@@ -1,5 +1,6 @@
 package com.example.execu_chat
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -23,7 +24,8 @@ data class SearchResponse(
 )
 
 class SearchClient(
-    private val baseUrl: String = "http://192.168.1.14:8080"
+    private val context: Context,
+    private val baseUrl: String
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -40,10 +42,12 @@ class SearchClient(
         maxResults: Int = 5
     ): List<SearchResult> = withContext(Dispatchers.IO) {
         try {
+            val token = TokenManager.accessToken(context) ?: return@withContext emptyList()
             val url = "$baseUrl/search?q=${query.urlEncode()}&format=json"
 
             val request = Request.Builder()
                 .url(url)
+                .addHeader("Authorization", "Bearer $token")
                 .build()
 
             client.newCall(request).execute().use { response ->

@@ -24,6 +24,7 @@
             <RelativeLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content">
+
                 <ImageButton
                     android:id="@+id/menuBtn"
                     android:layout_width="wrap_content"
@@ -36,25 +37,21 @@
                     android:id="@+id/toolbarTitle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:layout_centerInParent="true"
                     android:layout_marginStart="12dp"
                     android:text="@string/toolbar_name"
-                    android:layout_centerInParent="true"
                     android:textColor="@android:color/white"
                     android:textSize="20sp"
                     android:textStyle="bold" />
 
-                <TextView
-                    android:id="@+id/memUsage"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                <View
+                    android:id="@+id/healthDot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
                     android:layout_alignParentEnd="true"
                     android:layout_centerVertical="true"
-                    android:layout_marginEnd="12dp"
-                    android:text="-- MB"
-                    android:textColor="@android:color/white"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:visibility="visible" />
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/dot_red" />
 
             </RelativeLayout>
 
@@ -279,6 +276,23 @@
         android:fitsSystemWindows="true">
 
         <TextView
+            android:id="@+id/usernameLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="?attr/colorOnSurface"
+            android:drawablePadding="8dp"
+            android:padding="8dp"
+            android:text="username" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#E0E0E0"
+            android:layout_marginVertical="8dp" />
+
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/system_prompt"
@@ -326,6 +340,15 @@
             android:layout_height="0dp"
             android:layout_weight="1"
             android:paddingTop="8dp" />
+
+        <Button
+            android:id="@+id/logoutBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Logout"
+            android:layout_marginTop="16dp"
+            style="?attr/borderlessButtonStyle"
+            android:textColor="#F44336" />
     </LinearLayout>
 
 </androidx.drawerlayout.widget.DrawerLayout>
