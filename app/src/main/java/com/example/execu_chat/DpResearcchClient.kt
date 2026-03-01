@@ -38,11 +38,7 @@ class DeepResearchClient(
     private val context: Context,
     private val baseUrl: String
     ) {
-        private val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS)   // SSE streams indefinitely
-            .writeTimeout(10, TimeUnit.SECONDS)
-            .build()
+        private val client = OkHttpProvider.authedSseClient(context, baseUrl)
 
         private val json = Json {
             ignoreUnknownKeys = true
@@ -61,7 +57,7 @@ class DeepResearchClient(
         ): ResearchTask = withContext(Dispatchers.IO) {
             val body = """
             {
-                "query": ${json.encodeToString(kotlinx.serialization.serializer(), query)},
+                "query": ${Json.encodeToString(query)},
                 "max_searches": $maxSearches,
                 "max_results_per_search": $maxResultsPerSearch
             }
@@ -69,7 +65,6 @@ class DeepResearchClient(
 
             val request = Request.Builder()
                 .url("$baseUrl/research")
-                .addHeader("Authorization", "Bearer ${TokenManager.accessToken(context)}")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
 
@@ -110,6 +105,7 @@ class DeepResearchClient(
                 .url("$baseUrl/research/$taskId")
                 .delete()
                 .build()
+
             client.newCall(request).execute().close()
         }
 

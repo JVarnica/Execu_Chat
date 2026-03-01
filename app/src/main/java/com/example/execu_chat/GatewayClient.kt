@@ -30,12 +30,9 @@ class GatewayClient(
     ) {
     private val JSON_TYPE = "application/json".toMediaType() // converts string to mediatype obj for request
 
-    private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .build()
+    private val httpClient = OkHttpProvider.authedClient(context, gatewayUrl)
 
+    private val sseClient = OkHttpProvider.authedSseClient(context, gatewayUrl)
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -99,40 +96,6 @@ class GatewayClient(
                         val detail = runCatching { JSONObject(text).getString("detail") }
                             .getOrDefault("Login failed (${resp.code})")
                         Result.failure(Exception(detail))
-                    }
-                }
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
-
-    suspend fun refreshTokens(): Result<AuthTokens> =
-        withContext(Dispatchers.IO) {
-            try {
-                val refresh = TokenManager.refreshToken(context)
-                    ?: return@withContext Result.failure(Exception("No refresh token"))
-
-                val body = JSONObject().apply {
-                    put("refresh_token", refresh)
-                }.toString().toRequestBody(JSON_TYPE)
-
-                val request = Request.Builder()
-                    .url("$gatewayUrl/refresh")
-                    .post(body)
-                    .build()
-
-                httpClient.newCall(request).execute().use { resp ->
-                    val text = resp.body?.string().orEmpty()
-                    if (resp.isSuccessful) {
-                        val j = JSONObject(text)
-                        val tokens = AuthTokens(
-                            accessToken  = j.getString("access_token"),
-                            refreshToken = j.getString("refresh_token")
-                        )
-                        TokenManager.save(context, tokens.accessToken, tokens.refreshToken)
-                        Result.success(tokens)
-                    } else {
-                        Result.failure(Exception("Token refresh failed"))
                     }
                 }
             } catch (e: Exception) {

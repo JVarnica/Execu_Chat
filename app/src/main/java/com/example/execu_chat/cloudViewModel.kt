@@ -45,27 +45,13 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
     )
     private val researchClient = DeepResearchClient(getApplication(), baseUrl = ServerConfig.GATEWAY_URL)
     private val THINKING_SYSTEM_PROMPT = """
-    You are a helpful AI assistant. When reasoning through problems, use the following format:
-    
-    <think>
-    [Your detailed reasoning here]
-    
-    <summary>One sentence summarizing your key insight or approach</summary>
-    </think>
-    
-    Your actual response here.
-    
-    Example:
-    <think>
-    The user is asking about Paris. I need to provide the capital of France.
-    France is a European country. Paris is both the capital and largest city.
-    I should be direct and accurate.
-    
-    <summary>Straightforward geography question - provide capital of France</summary>
-    </think>
-    Paris is the capital and largest city of France.
-    
-    Always include the <summary> tag at the END of your thinking, right before </think>.
+ You are a helpful AI assistant.
+
+For complex questions requiring analysis, wrap your reasoning in <think>...</think> tags before 
+responding. For simple/factual questions, respond directly without thinking.
+
+When you do use <think>, end your reasoning with a one-line <summary>...</summary> tag capturing
+your key conclusion, placed just before </think>.
     """.trimIndent()
 
 
@@ -264,6 +250,7 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
                         "error" -> {
                             val errorMsg = data["message"]?.jsonPrimitive?.content
                                 ?: "Research failed"
+                            Log.e("RESEARCH", "Error from server: $errorMsg")
                             _error.value = errorMsg
                             _researchProgress.value = progress.copy(
                                 phase = "error",

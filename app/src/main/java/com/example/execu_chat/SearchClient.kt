@@ -5,9 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
+
 
 @Serializable
 data class SearchResult(
@@ -27,10 +26,7 @@ class SearchClient(
     private val context: Context,
     private val baseUrl: String
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    private val client = OkHttpProvider.authedClient(context, baseUrl)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -42,12 +38,11 @@ class SearchClient(
         maxResults: Int = 5
     ): List<SearchResult> = withContext(Dispatchers.IO) {
         try {
-            val token = TokenManager.accessToken(context) ?: return@withContext emptyList()
+
             val url = "$baseUrl/search?q=${query.urlEncode()}&format=json"
 
             val request = Request.Builder()
                 .url(url)
-                .addHeader("Authorization", "Bearer $token")
                 .build()
 
             client.newCall(request).execute().use { response ->
