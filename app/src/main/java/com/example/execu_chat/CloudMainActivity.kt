@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.os.Bundle
 import android.util.Log
 import android.widget.*
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.GravityCompat
@@ -22,10 +23,8 @@ import kotlinx.coroutines.launch
 enum class ToolMode(val label: String, val icon: String) {
     NONE("Chat", "💬"),
     SEARCH("Search", "🔍"),
+    RAG("Memory", "🧠"),
     DEEP_RESEARCH("Deep Research", "🔬"),
-    // Future tools go here:
-    // SUMMARISE("Summarise", "📝"),
-    // TRANSLATE("Translate", "🌐"),
 }
 
 class CloudChatActivity : AppCompatActivity() {
@@ -99,7 +98,7 @@ class CloudChatActivity : AppCompatActivity() {
         chatList.adapter = chatAdapter
 
         // Load saved chats
-        refreshChatList()
+        viewModel.refreshChatList()
 
         // Observe messages
         lifecycleScope.launch {
@@ -177,12 +176,27 @@ class CloudChatActivity : AppCompatActivity() {
                 }
             }
         }
+        // Observe server chat list
+        lifecycleScope.launch {
+            viewModel.serverChats.collectLatest { items ->
+                val threads = items.map { item ->
+                    ChatThread(
+                        id = item.convoId,
+                        title = item.title.ifBlank { "(untitled)" },
+                        preview = formatTimestamp(item.updatedAt),
+                        path = "" // used for server chats
+                    )
+                }
+                chatAdapter.submitList(threads)
+            }
+        }
         menu.setOnClickListener {
+            viewModel.refreshChatList()
             drawerLayout.openDrawer(GravityCompat.START)
         }
         // Save button
         save.setOnClickListener {
-            saveCurrentChat()
+            showSaveDialog()
         }
 
         // New chat button
@@ -218,6 +232,10 @@ class CloudChatActivity : AppCompatActivity() {
                     }
                     ToolMode.DEEP_RESEARCH -> {
                         viewModel.startDeepResearch(text)
+                        Log.d("MainAc", "Depp research activated ")
+                    }
+                    ToolMode.RAG -> {
+                        viewModel.sendMessage(text, enableSearch = false, enableRag = true)
                         Log.d("MainAc", "Depp research activated ")
                     }
                 }
@@ -258,31 +276,47 @@ class CloudChatActivity : AppCompatActivity() {
             input.hint = "${tool.label}..."
         }
     }
-    private fun saveCurrentChat() {
-        viewModel.saveCurrentChat(this)
-        Toast.makeText(this, "Chat saved", Toast.LENGTH_SHORT).show()
-        refreshChatList()
+    // ── Save / Load / Delete (server-backed) ─────────────────────────
+
+    private fun showSaveDialog() {
+        val editText = EditText(this).apply {
+            hint = "Chat title"
+            setPadding(48, 32, 48, 32)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Save Chat")
+            .setView(editText)
+            .setPositiveButton("Save") { _, _ ->
+                val title = editText.text?.toString()?.trim().orEmpty()
+                    .ifBlank { "Untitled Chat" }
+                viewModel.saveCurrentSession(title)
+                Toast.makeText(this, "Saving…", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun loadSavedChat(thread: ChatThread) {
-        viewModel.loadChat(this, thread)
+        viewModel.loadChat(thread.id)
         Toast.makeText(this, "Chat loaded", Toast.LENGTH_SHORT).show()
         drawerLayout.closeDrawer(GravityCompat.START)
     }
 
     private fun deleteSavedChat(thread: ChatThread) {
-        viewModel.deleteChat(this, thread)
-        refreshChatList()
+        viewModel.deleteChat( thread.id)
     }
 
     private fun startNewChat() {
         viewModel.clearMessages()
+        viewModel.newServerSession()
         drawerLayout.closeDrawer(GravityCompat.START)
     }
 
-    private fun refreshChatList() {
-        val threads = viewModel.getSavedChats(this)
-        chatAdapter.submitList(threads)
+    private fun formatTimestamp(epochSeconds: Long): String {
+        if (epochSeconds <= 0) return ""
+        val sdf = java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(epochSeconds * 1000))
     }
 }
 

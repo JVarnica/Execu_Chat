@@ -1,5 +1,6 @@
 ### Online Inference-vLLM
 
+
 The models on mobile phone are okay but too small to have a proper conversation with, therefore to use
 smarter models you either host one yourself or call an API (OpenAI/Claude). Self hosting was the option
 I went for as I am cheap. 

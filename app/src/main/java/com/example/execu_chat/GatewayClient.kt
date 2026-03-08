@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Call
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -16,6 +17,7 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -39,6 +41,7 @@ class GatewayClient(
     }
 
     data class AuthTokens(val accessToken: String, val refreshToken: String)
+    data class SaveChatResponse(val convoId: String, val savedPairs: Int)
 
     suspend fun register(username: String, password: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -128,8 +131,188 @@ class GatewayClient(
         }
     }
 
+    private fun assertSuccessful(response: Response) {
+        if (response.code == 401) {
+            throw UnauthorizedException("Token expired / invalid")
+        }
+        if (!response.isSuccessful) {
+            throw RuntimeException("Request failed: ${response.code} ${response.message}")
+        }
+    }
+
+    suspend fun createSession(): String = withContext(Dispatchers.IO) {
+        val token = requireToken()
+
+        val req = Request.Builder()
+            .url("$gatewayUrl/session/create")
+            .post("{}".toRequestBody(JSON_TYPE))
+            .header("Authorization", "Bearer $token")
+            .build()
+        httpClient.newCall(req).execute().use { resp ->
+            assertSuccessful(resp)
+            val text = resp.body?.string().orEmpty()
+            val sessionId = JSONObject(text).getString("session_id")
+            sessionId
+        }
+    }
+    fun streamChat(
+        sessionId: String,
+        message: String,
+        enableSearch: Boolean,
+        enableRag: Boolean,
+        model: String,
+        temperature: Double,
+        maxTokens: Int,
+        onDelta: (String) -> Unit,
+        onDone: () -> Unit,
+        onError: (Throwable) -> Unit
+    ): EventSource {
+        val token = requireToken()
+
+        val payload = JSONObject().apply {
+            put("session_id", sessionId)
+            put("message", message)
+            put("enable_search", enableSearch)
+            put("enable_rag", enableRag)
+            put("model", model)
+            put("temperature", temperature)
+            put("max_tokens", maxTokens)
+        }.toString()
+
+        val req = Request.Builder()
+            .url("$gatewayUrl/v1/chat/completions")
+            .post(payload.toRequestBody(JSON_TYPE))
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "text/event-stream")
+            .build()
+
+        val listener = object : EventSourceListener() {
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                // gateway forwards OpenAI style: data: {...} and data: [DONE]
+                if (data == "[DONE]") {
+                    onDone()
+                    eventSource.cancel()
+                    return
+                }
+
+                try {
+                    val obj = JSONObject(data)
+                    val choices = obj.optJSONArray("choices") ?: return
+                    if (choices.length() == 0) return
+                    val c0 = choices.optJSONObject(0) ?: return
+                    val delta = c0.optJSONObject("delta")
+                    val content = delta?.optString("content", "") ?: ""
+                    if (content.isNotEmpty()) onDelta(content)
+
+                    val finish = c0.optString("finish_reason", null)
+                    if (finish == "stop" || finish == "length") {
+                        onDone()
+                        eventSource.cancel()
+                    }
+                } catch (_: Exception) {
+                    // ignore malformed SSE chunks
+                }
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                onError(t ?: RuntimeException("SSE failure"))
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                // If server closes without [DONE], treat as done
+                onDone()
+            }
+        }
+        return EventSources.createFactory(sseClient).newEventSource(req, listener)
+    }
+    suspend fun saveChat(
+        sessionId: String,
+        title: String,
+        convoId: String? = null
+    ): SaveChatResponse = withContext(Dispatchers.IO) {
+        val token = requireToken()
+
+        val payload = JSONObject().apply {
+            put("session_id", sessionId)
+            put("title", title)
+            if (convoId != null ) put("conv_id", convoId)
+        }.toString()
+
+        val req = Request.Builder()
+            .url("$gatewayUrl/save/save_chat")
+            .post(payload.toRequestBody(JSON_TYPE))
+            .header("Authorization", "Bearer $token")
+            .build()
+
+        val response = httpClient.newCall(req).execute()
+        response.use { resp ->
+            assertSuccessful(resp)
+            val text = resp.body?.string().orEmpty()
+            val j = JSONObject(text)
+            val result = SaveChatResponse(
+                convoId = j.getString("convo_id"),
+                savedPairs = j.optInt("saved_pairs", 0)
+            )
+            result
+        }
+    }
+
+    suspend fun listChats(
+        limit: Int = 50,
+        offset: Int = 0,
+    ): List<JSONObject> = withContext(Dispatchers.IO) {
+        val token = requireToken()
+
+        // NOTE: your backend uses POST /save/chat_list (weird but fine)
+        val req = Request.Builder()
+            .url("$gatewayUrl/save/chat_list?limit=$limit&offset=$offset")
+            .get()
+            .header("Authorization", "Bearer $token")
+            .build()
+
+        httpClient.newCall(req).execute().use { resp ->
+            assertSuccessful(resp)
+            val text = resp.body?.string().orEmpty()
+            val arr = JSONArray(text)
+            List(arr.length()) {i -> arr.getJSONObject(i)}
+        }
+    }
+
+    suspend fun loadChat(convoId: String): JSONObject =
+        withContext(Dispatchers.IO) {
+            val token = requireToken()
+
+            val req = Request.Builder()
+                .url("$gatewayUrl/save/load_chat/$convoId")
+                .get()
+                .header("Authorization", "Bearer $token")
+                .build()
+
+            httpClient.newCall(req).execute().use {resp ->
+                assertSuccessful(resp)
+                val text = resp.body?.string().orEmpty()
+                JSONObject(text)
+            }
+        }
+    suspend fun deleteChat(convoId: String): Unit = withContext(Dispatchers.IO) {
+        val token = requireToken()
+
+        val req = Request.Builder()
+            .url("$gatewayUrl/save/delete_chat/$convoId")
+            .delete()
+            .header("Authorization", "Bearer $token")
+            .build()
+
+        val response = httpClient.newCall(req).execute()
+        response.use { resp ->
+            assertSuccessful(resp)
+        }
+    }
+
     private fun String.urlEncode(): String =
         java.net.URLEncoder.encode(this, "UTF-8")
+
+
 }
 /** Thrown on 401 — ViewModel can catch this to trigger refresh or logout. */
 class UnauthorizedException(message: String) : RuntimeException(message)

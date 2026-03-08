@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resumeWithException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -31,43 +33,49 @@ data class SourceItem(
     val url: String,
     val snippet: String = ""
 )
+/** Represents a saved conversation from the server. */
+data class ChatListItem(
+    val convoId: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
 
 class CloudChatViewModel(application: Application) : AndroidViewModel(application) {
     private val gateway = GatewayClient(getApplication(), ServerConfig.GATEWAY_URL)
-    private val vllm = VllmClient(
-       getApplication(),
-        ServerConfig.DEFAULT_MODEL,
-        ServerConfig.GATEWAY_URL,
-    )
-    private val searchClient = SearchClient(
-        context = getApplication(),
-        baseUrl = ServerConfig.GATEWAY_URL
-    )
     private val researchClient = DeepResearchClient(getApplication(), baseUrl = ServerConfig.GATEWAY_URL)
-    private val THINKING_SYSTEM_PROMPT = """
- You are a helpful AI assistant.
-
-For complex questions requiring analysis, wrap your reasoning in <think>...</think> tags before 
-responding. For simple/factual questions, respond directly without thinking.
-
-When you do use <think>, end your reasoning with a one-line <summary>...</summary> tag capturing
-your key conclusion, placed just before </think>.
-    """.trimIndent()
-
-
+    //Chat Messages
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+    //loading/ error
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+    //server health
     private val _serverHealthy = MutableStateFlow(false)
     val serverHealthy: StateFlow<Boolean> = _serverHealthy.asStateFlow()
 
+    // ── Research state (new) ─────────────────────────────────────────
+    private val _isResearching = MutableStateFlow(false)
+    val isResearching: StateFlow<Boolean> = _isResearching.asStateFlow()
+    private val _researchProgress = MutableStateFlow<ResearchProgress?>(null)
+    val researchProgress: StateFlow<ResearchProgress?> = _researchProgress.asStateFlow()
+    private var researchJob: Job? = null
+    private var currentTaskId: String? = null
+    //gateway session id
+    private val _sessionId = MutableStateFlow<String?>(null)
+    val sessionId: StateFlow<String?> = _sessionId.asStateFlow()
+    //saved chats list
+    private val _serverChats = MutableStateFlow<List<ChatListItem>>(emptyList())
+    val serverChats: StateFlow<List<ChatListItem>> = _serverChats.asStateFlow()
+
+    private var currentConvoId: String? = null
+    fun currentUserId(): String? = gateway.currentUserId()
+
     init {
-        // Poll health every 30 seconds
         viewModelScope.launch {
             while (true) {
                 _serverHealthy.value = gateway.isHealthy()
@@ -75,35 +83,40 @@ your key conclusion, placed just before </think>.
             }
         }
     }
-
-    /** Trigger an immediate health check (e.g. on resume). */
     fun checkHealthNow() {
         viewModelScope.launch {
             _serverHealthy.value = gateway.isHealthy()
         }
     }
+    private suspend fun ensureSession(): String {
+        val existing = _sessionId.value
+        if (!existing.isNullOrBlank()) return existing
+        val sid = gateway.createSession()
+        _sessionId.value = sid
+        return sid
+    }
 
-    // ── Research state (new) ─────────────────────────────────────────
-    private val _isResearching = MutableStateFlow(false)
-    val isResearching: StateFlow<Boolean> = _isResearching.asStateFlow()
-
-    private val _researchProgress = MutableStateFlow<ResearchProgress?>(null)
-    val researchProgress: StateFlow<ResearchProgress?> = _researchProgress.asStateFlow()
-
-    private var researchJob: Job? = null
-    private var currentTaskId: String? = null
-    private var currentChatId: String? = null
-
-    fun currentUserId(): String? = gateway.currentUserId()
-
-    fun sendMessage(text: String, enableSearch: Boolean = false) {
+    fun newServerSession() {
+        viewModelScope.launch {
+            try {
+                val sid = gateway.createSession()
+                _sessionId.value = sid
+                _messages.value = emptyList()
+                _error.value = null
+                currentConvoId = null
+            } catch (e: Exception) {
+                _error.value = e.message
+            }
+        }
+    }
+    fun sendMessage(text: String, enableSearch: Boolean = false, enableRag: Boolean = false) {
         if (text.isBlank() || _isLoading.value) return
 
         // Add user message
         val userMsg = ChatMessage(ChatMessage.Role.User, text)
         val currentMessages = _messages.value.toMutableList()
         currentMessages.add(userMsg)
-        _messages.value = currentMessages
+        //_messages.value = currentMessages
 
         // Add empty assistant placeholder
         val emptyAssistant = ChatMessage(ChatMessage.Role.Assistant, "")
@@ -115,50 +128,43 @@ your key conclusion, placed just before </think>.
         _error.value = null
 
         viewModelScope.launch {
-            val responseText = StringBuilder()
             try {
-                // Messages for API (without the empty placeholder)
-                var messagesForApi = currentMessages.dropLast(1).map { prepareMessageForContext(it) }
+                val sid = ensureSession()
 
-                // ADD system message with thinking instructions
-                val systemMsg = ChatMessage(
-                    ChatMessage.Role.System,
-                    THINKING_SYSTEM_PROMPT
-                )
-                if (enableSearch) {
-                    val searchResults = searchClient.search(text)
-                    if (searchResults.isNotEmpty()) {
-                        val searchContext = formatSearchResults(searchResults)
-                        val searchMessage = ChatMessage(
-                            ChatMessage.Role.System,
-                            searchContext)
-                        messagesForApi = listOf(systemMsg, searchMessage) + messagesForApi
-                    } else {
-                        messagesForApi = listOf(systemMsg) + messagesForApi
-                    }
-                } else {
-                    messagesForApi = listOf(systemMsg) + messagesForApi
+                suspendCancellableCoroutine { cont ->
+                    val responseText = StringBuilder()
+                    val eventSource = gateway.streamChat(
+                        sessionId = sid,
+                        message = text,
+                        enableSearch = enableSearch,
+                        enableRag = enableRag,
+                        model = ServerConfig.DEFAULT_MODEL,
+                        temperature = 0.7,
+                        maxTokens = 4096,
+                        onDelta = { chunk ->
+                            responseText.append(chunk)
+                            val updated = _messages.value.toMutableList()
+                            updated[assistantIndex] = ChatMessage(ChatMessage.Role.Assistant, responseText.toString())
+                            _messages.value = updated
+                        },
+                        onDone = {
+                            val updated = _messages.value.toMutableList()
+                            if (assistantIndex < updated.size) {
+                                updated[assistantIndex] =
+                                    ChatMessage(ChatMessage.Role.Assistant, responseText.toString())
+                                _messages.value = updated
+                            }
+                            if (cont.isActive) cont.resume(Unit) {}
+                        },
+                        onError = { e ->
+                            if (cont.isActive) cont.resumeWithException(e)
+                        }
+                    )
+                    cont.invokeOnCancellation { eventSource.cancel()}
                 }
-                Log.d("vllm_prompt", "$messagesForApi")
-                vllm.streamChatCompletion(
-                    messages = messagesForApi,
-                    onDelta = { chunk ->
-                        responseText.append(chunk)
-
-                        // Update assistant message
-                        val updatedMessages = _messages.value.toMutableList()
-                        updatedMessages[assistantIndex] = ChatMessage(
-                            ChatMessage.Role.Assistant,
-                            responseText.toString()
-                        )
-                        _messages.value = updatedMessages
-                    }
-                )
-
             } catch (e: Exception) {
                 e.printStackTrace()
                 _error.value = e.message ?: "Unknown error"
-
                 // Update with error message
                 val updatedMessages = _messages.value.toMutableList()
                 updatedMessages[assistantIndex] = ChatMessage(
@@ -166,7 +172,6 @@ your key conclusion, placed just before </think>.
                     "Error: ${e.message ?: e.javaClass.simpleName}"
                 )
                 _messages.value = updatedMessages
-
             } finally {
                 _isLoading.value = false
             }
@@ -282,30 +287,6 @@ your key conclusion, placed just before </think>.
         }
     }
 
-    private fun prepareMessageForContext(msg: ChatMessage): ChatMessage {
-        if (msg.role != ChatMessage.Role.Assistant) {
-            return msg
-        }
-
-        val (thinking, content) = ChatMessage.extractCleanContent(msg.text)
-
-        if (thinking == null) {
-            return ChatMessage(msg.role, content, null, msg.timestamp)
-        }
-
-        // Try to get model's own summary
-        val summary = ChatMessage.extractThinkingSummary(msg.text)
-
-        val condensedText = if (summary != null) {
-            // Use model's summary
-            "[Previous reasoning: $summary]\n\n$content"
-        } else {
-            // Fallback: just use content without thinking
-            content
-        }
-
-        return ChatMessage(msg.role, condensedText, null, msg.timestamp)
-    }
     fun cancelDeepResearch() {
         researchJob?.cancel()
         currentTaskId?.let { id ->
@@ -319,88 +300,95 @@ your key conclusion, placed just before </think>.
 
     fun clearMessages() {
         _messages.value = emptyList()
-        currentChatId = null
+        currentConvoId = null
+        _sessionId.value = null
     }
 
-    fun saveCurrentChat(context: Context) {
-        val messages = _messages.value
-        if (messages.isEmpty() || messages.all { it.text.isBlank() }) {
-            Toast.makeText(context, "Nothing to save", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val transcript = buildTranscript(messages)
-        if (transcript.isBlank()) return
-        if (currentChatId != null ) {
-            ChatStore.update(context, currentChatId!!, transcript)
-        } else {
-            val newThread = ChatStore.save(context, transcript)
-            currentChatId = newThread.id
-        }
-    }
+    fun saveCurrentSession(title: String) {
+        val sid = sessionId.value ?: return
+        viewModelScope.launch {
+            try {
+                val resp = gateway.saveChat(sessionId = sid, title = title, convoId = currentConvoId)
+                Log.d("SAVE", "Saved convo=${resp.convoId}, pairs=${resp.savedPairs}")
+                currentConvoId = resp.convoId
 
-    fun loadChat(context: Context, thread: ChatThread) {
-        val transcript = ChatStore.load(thread)
-        val messages = parseTranscript(transcript)
-        _messages.value = messages
-        currentChatId = thread.id
-    }
+                // Server deleted the redis session keys, so get a fresh one
+                _sessionId.value = gateway.createSession()
 
-    fun getSavedChats(context: Context): List<ChatThread> {
-        return ChatStore.list(context)
-    }
-
-    fun deleteChat(context: Context, thread: ChatThread) {
-        // You'll need to add this to ChatStore
-        ChatStore.delete(context, thread.id)
-         if (currentChatId == thread.id) {
-             clearMessages()
-         }
-    }
-
-    private fun buildTranscript(messages: List<ChatMessage>): String {
-        return messages.joinToString("\n") { msg ->
-            val (_, cleanContent) = ChatMessage.extractCleanContent(msg.text)
-            when (msg.role) {
-                ChatMessage.Role.User -> "User: ${cleanContent}"
-                ChatMessage.Role.Assistant -> "Assistant: ${cleanContent}"
-                ChatMessage.Role.System -> "System: ${cleanContent}"
+                // Refresh sidebar
+                refreshChatList()
+            } catch (e: Exception) {
+                _error.value = e.message
             }
         }
     }
-    private fun parseTranscript(transcript: String): List<ChatMessage> {
-        return transcript.split("\n")
-            .mapNotNull { block ->
-                val trimmed = block.trim()
-                when {
-                    trimmed.startsWith("User: ") -> ChatMessage(
-                        ChatMessage.Role.User,
-                        trimmed.removePrefix("User: ")
+    fun refreshChatList() {
+        viewModelScope.launch {
+            try {
+                val arr = gateway.listChats(limit = 50, offset = 0)
+                _serverChats.value = arr.map { obj ->
+                    ChatListItem(
+                        convoId = obj.optString("convo_id", ""),
+                        title = obj.optString("title", "(untitled)"),
+                        createdAt = obj.optLong("created_at", 0),
+                        updatedAt = obj.optLong("updated_at", 0),
                     )
-                    trimmed.startsWith("Assistant: ") -> ChatMessage(
-                        ChatMessage.Role.Assistant,
-                        trimmed.removePrefix("Assistant: ")
-                    )
-                    trimmed.startsWith("System: ") -> ChatMessage(
-                        ChatMessage.Role.System,
-                        trimmed.removePrefix("System: ")
-                    )
-                    else -> null
                 }
+            } catch (e: Exception) {
+                Log.e("CHATS", "Failed to list chats: ${e.message}")
+                _error.value = e.message
             }
+        }
     }
-    private fun formatSearchResults(results: List<SearchResult>): String {
-        return buildString {
-            appendLine("Here are relevant search results to help answer the question:")
-            appendLine()
-            results.forEachIndexed { index, result ->
-                appendLine("${index + 1}. ${result.title}")
-                appendLine("   URL: ${result.url}")
-                if (result.content.isNotBlank()) {
-                    appendLine("   ${result.content.take(200)}...")
+    fun loadChat(convoId: String) {
+        viewModelScope.launch {
+            try {
+                val convo = gateway.loadChat(convoId)
+                currentConvoId = convoId
+
+                val msgsArray = convo.optJSONArray("messages")
+                if (msgsArray != null) {
+                    val chatMessages = mutableListOf<ChatMessage>()
+                    for (i in 0 until msgsArray.length()) {
+                        val m = msgsArray.getJSONObject(i)
+                        val role = when (m.optString("role")) {
+                            "user" -> ChatMessage.Role.User
+                            "assistant" -> ChatMessage.Role.Assistant
+                            else -> continue
+                        }
+                        val content = m.optString("content", "")
+                        chatMessages.add(ChatMessage(role, content))
+                    }
+                    _messages.value = chatMessages
                 }
-                appendLine()
+
+                // Fresh redis session with old convo/pairs replayed
+                val sid = convo.optString("session_id", "")
+                _sessionId.value = sid.ifBlank { null }
+            } catch (e: Exception) {
+                Log.e("CHATS", "Failed to load chat: ${e.message}")
+                _error.value = e.message
             }
-            appendLine("Use this information to provide an accurate, up-to-date answer.")
+        }
+    }
+
+
+    fun deleteChat(convoId: String) {
+        viewModelScope.launch {
+            try {
+                gateway.deleteChat(convoId)
+                _serverChats.value = _serverChats.value.filter { it.convoId != convoId }
+
+                // If we just deleted the currently loaded chat, clear the screen
+                if (currentConvoId == convoId) {
+                    _messages.value = emptyList()
+                    _sessionId.value = null
+                    currentConvoId = null
+                }
+            } catch (e: Exception) {
+                Log.e("CHATS", "Failed to delete chat: ${e.message}")
+                _error.value = e.message
+            }
         }
     }
 }
