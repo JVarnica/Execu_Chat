@@ -116,7 +116,6 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
         val userMsg = ChatMessage(ChatMessage.Role.User, text)
         val currentMessages = _messages.value.toMutableList()
         currentMessages.add(userMsg)
-        //_messages.value = currentMessages
 
         // Add empty assistant placeholder
         val emptyAssistant = ChatMessage(ChatMessage.Role.Assistant, "")

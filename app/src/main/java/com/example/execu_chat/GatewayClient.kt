@@ -180,7 +180,7 @@ class GatewayClient(
         }.toString()
 
         val req = Request.Builder()
-            .url("$gatewayUrl/v1/chat/completions")
+            .url("$gatewayUrl/chat")
             .post(payload.toRequestBody(JSON_TYPE))
             .header("Authorization", "Bearer $token")
             .header("Accept", "text/event-stream")
@@ -263,7 +263,7 @@ class GatewayClient(
     ): List<JSONObject> = withContext(Dispatchers.IO) {
         val token = requireToken()
 
-        // NOTE: your backend uses POST /save/chat_list (weird but fine)
+        
         val req = Request.Builder()
             .url("$gatewayUrl/save/chat_list?limit=$limit&offset=$offset")
             .get()

@@ -40,16 +40,21 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
                 notifyItemRangeRemoved(0, oldSize)
             }
             else -> {
-                val minSize = minOf(oldSize, newItems.size)
-                if (minSize > 0) {
-                    notifyItemRangeChanged(0, minSize)
-                }
-                when {
-                    newItems.size > oldSize -> {
-                        notifyItemRangeInserted(oldSize, newItems.size - oldSize)
+                if (newItems.size == oldSize) {
+                    notifyItemChanged(items.size - 1)
+                } else {
+                    val minSize = minOf(oldSize, newItems.size)
+                    if (minSize > 0) {
+                        notifyItemRangeChanged(0, minSize)
                     }
-                    newItems.size < oldSize -> {
-                        notifyItemRangeRemoved(newItems.size, oldSize - newItems.size)
+                    when {
+                        newItems.size > oldSize -> {
+                            notifyItemRangeInserted(oldSize, newItems.size - oldSize)
+                        }
+
+                        newItems.size < oldSize -> {
+                            notifyItemRangeRemoved(newItems.size, oldSize - newItems.size)
+                        }
                     }
                 }
             }
@@ -141,8 +146,8 @@ class MessageAdapter : RecyclerView.Adapter<MessageAdapter.MessageViewHolder>() 
 
             // Position message bubble
             val lp = messageContainer.layoutParams as FrameLayout.LayoutParams
-            lp.gravity = if (message.isUser) Gravity.END else Gravity.START
-            messageContainer.layoutParams = lp
+            //lp.gravity = if (message.isUser) Gravity.END else Gravity.START
+            //messageContainer.layoutParams = lp
 
             // Style message bubble
             if (message.isUser) {

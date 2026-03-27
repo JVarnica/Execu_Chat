@@ -1,4 +1,4 @@
-package com.example.execu_chat
+/*package com.example.execu_chat
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
@@ -66,3 +66,4 @@ class SearchClient(
         return java.net.URLEncoder.encode(this, "UTF-8")
     }
 }
+ */
