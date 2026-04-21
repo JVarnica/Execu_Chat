@@ -5,7 +5,6 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 object OkHttpProvider {
-
     @Volatile private var refreshClient: OkHttpClient? = null
     @Volatile private var authedClient: OkHttpClient? = null
     @Volatile private var authedSseClient: OkHttpClient? = null
@@ -20,7 +19,6 @@ object OkHttpProvider {
                 .also { refreshClient = it }
         }
     }
-
     fun authedClient(context: Context, baseUrl: String): OkHttpClient {
         return authedClient ?: synchronized(this) {
             authedClient ?: OkHttpClient.Builder()
@@ -38,7 +36,6 @@ object OkHttpProvider {
                 .also { authedClient = it }
         }
     }
-
     fun authedSseClient(context: Context, baseUrl: String): OkHttpClient {
         return authedSseClient ?: synchronized(this) {
             authedSseClient ?: authedClient(context, baseUrl).newBuilder()

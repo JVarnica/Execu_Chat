@@ -46,8 +46,15 @@ class JwtAuthInterceptor(
         if (path == "/refresh" || authed.header("X-Retry") == "1") return response
 
         response.close()
-
-        val refreshed = refreshTokensBlocking()
+        // Retry bit
+        val refreshed = synchronized(this) {
+            val currentAccess = TokenManager.accessToken(context)
+            if (currentAccess != null && currentAccess != access) {
+                true
+            } else {
+                refreshTokensBlocking()
+            }
+        }
         if (!refreshed) {
             TokenManager.clear(context)
             // give back a 401-ish outcome by retrying once without looping

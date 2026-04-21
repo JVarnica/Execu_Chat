@@ -35,12 +35,12 @@ On-device LLM inference — nothing leaves the phone.
 
 ### Online Mode
 
-Cloud-powered inference via self-hosted docker stack with vLLM for model inference, searXNG for 
-search, and python/LangChain for deep-research. 6 services/containers all on same network
+Cloud-powered inference via self-hosted docker stack with vLLM for model inference, the app is made
+using FastAPI with jwt token for user authentication. There are 9 containers
 
 - **vLLM** serve hf models on gpu, OpenAI-API
 - **searcXNG** privacy metasearch engine, JSON API
-- **Python** to run LangChain, as fast-api for sse progress
+- **Auth** as seperate fast a
 - **Prometheus** for live metric collection
 - **gratana** for monitoring dashboards
 - **Redis** Task queue & caching for research agent

@@ -71,6 +71,9 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
     //saved chats list
     private val _serverChats = MutableStateFlow<List<ChatListItem>>(emptyList())
     val serverChats: StateFlow<List<ChatListItem>> = _serverChats.asStateFlow()
+    //tool usage
+    private val _agentSearchQuery = MutableStateFlow<String?>(null)
+    val agentSearchQuery = _agentSearchQuery.asStateFlow()
 
     private var currentConvoId: String? = null
     fun currentUserId(): String? = gateway.currentUserId()
@@ -109,9 +112,9 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
             }
         }
     }
-    fun sendMessage(text: String, enableSearch: Boolean = false, enableRag: Boolean = false) {
+    fun sendMessage(text: String, enableRag: Boolean = false) {
         if (text.isBlank() || _isLoading.value) return
-
+        //just ui send text only to vllm. history server side
         // Add user message
         val userMsg = ChatMessage(ChatMessage.Role.User, text)
         val currentMessages = _messages.value.toMutableList()
@@ -135,11 +138,10 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
                     val eventSource = gateway.streamChat(
                         sessionId = sid,
                         message = text,
-                        enableSearch = enableSearch,
                         enableRag = enableRag,
                         model = ServerConfig.DEFAULT_MODEL,
                         temperature = 0.7,
-                        maxTokens = 4096,
+                        //maxTokens = ServerConfig.maxTokens, server side now
                         onDelta = { chunk ->
                             responseText.append(chunk)
                             val updated = _messages.value.toMutableList()
@@ -147,6 +149,7 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
                             _messages.value = updated
                         },
                         onDone = {
+                            _agentSearchQuery.value = null
                             val updated = _messages.value.toMutableList()
                             if (assistantIndex < updated.size) {
                                 updated[assistantIndex] =
@@ -156,8 +159,12 @@ class CloudChatViewModel(application: Application) : AndroidViewModel(applicatio
                             if (cont.isActive) cont.resume(Unit) {}
                         },
                         onError = { e ->
+                            _agentSearchQuery.value = null
                             if (cont.isActive) cont.resumeWithException(e)
-                        }
+                        },
+                        onSearchStatus = { query ->
+                            _agentSearchQuery.value = query
+                        },
                     )
                     cont.invokeOnCancellation { eventSource.cancel()}
                 }

@@ -1,6 +1,7 @@
 package com.example.execu_chat
 //Cloud mainactivity all UI logic. Calls viewModel.
 
+import android.content.Intent
 import android.graphics.PorterDuff
 import android.view.Gravity
 import android.view.View
@@ -22,7 +23,6 @@ import kotlinx.coroutines.launch
 
 enum class ToolMode(val label: String, val icon: String) {
     NONE("Chat", "💬"),
-    SEARCH("Search", "🔍"),
     RAG("Memory", "🧠"),
     DEEP_RESEARCH("Deep Research", "🔬"),
 }
@@ -35,6 +35,7 @@ class CloudChatActivity : AppCompatActivity() {
     private lateinit var adapter: MessageAdapter
     private lateinit var menu: ImageButton
     private lateinit var newChatBtn: Button
+    private lateinit var logOutBtn: Button
     private lateinit var save: Button
     private lateinit var chatList: RecyclerView
     private lateinit var chatAdapter: ChatAdapter
@@ -54,6 +55,8 @@ class CloudChatActivity : AppCompatActivity() {
     private lateinit var researchSummaries: TextView
 
     private var activeTool: ToolMode = ToolMode.NONE
+    //non null when search query
+    private var agentSearchQuery: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +71,7 @@ class CloudChatActivity : AppCompatActivity() {
         send = findViewById(R.id.sendBtn)
         menu = findViewById(R.id.menuBtn)
         newChatBtn = findViewById(R.id.newChatBtn)
+        logOutBtn = findViewById(R.id.logOutBtn)
         save = findViewById(R.id.saveBtn)
         chatList = findViewById(R.id.chatList)
         plusBtn = findViewById(R.id.plusBtn)
@@ -168,6 +172,13 @@ class CloudChatActivity : AppCompatActivity() {
                 }
             }
         }
+
+        lifecycleScope.launch {
+            viewModel.agentSearchQuery.collectLatest { query ->
+                agentSearchQuery = query
+                renderToolChip()
+            }
+        }
         // Observe errors
         lifecycleScope.launch {
             viewModel.error.collectLatest { error ->
@@ -203,6 +214,12 @@ class CloudChatActivity : AppCompatActivity() {
         newChatBtn.setOnClickListener {
             startNewChat()
         }
+        // Logout back to loginActivity
+        logOutBtn.setOnClickListener {
+            TokenManager.clear(this)
+            startActivity(Intent(this, LoginActivity::class.java))
+            finishAffinity()
+        }
         // ── Research cancel button ───────────────────────────────────
         researchCancel.setOnClickListener {
             viewModel.cancelDeepResearch()
@@ -215,7 +232,9 @@ class CloudChatActivity : AppCompatActivity() {
 
         // ── Tool chip dismiss (tap X to go back to plain chat) ───────
         toolChipContainer.setOnClickListener {
-            setActiveTool(ToolMode.NONE)
+            if (agentSearchQuery == null) {
+                setActiveTool(ToolMode.NONE)
+            }
         }
         send.setOnClickListener {
             val text = input.text?.toString()?.trim().orEmpty()
@@ -223,19 +242,17 @@ class CloudChatActivity : AppCompatActivity() {
                 input.setText("")
                 when (activeTool) {
                     ToolMode.NONE -> {
-                        viewModel.sendMessage(text, enableSearch = false)
+                        viewModel.sendMessage(text)
                         Log.d("MainAc", "send message NORMAL")
                     }
-                    ToolMode.SEARCH -> {
-                        viewModel.sendMessage(text, enableSearch = true)
-                        Log.d("MainAc", "send message SEARCH")
-                    }
+
                     ToolMode.DEEP_RESEARCH -> {
                         viewModel.startDeepResearch(text)
                         Log.d("MainAc", "Depp research activated ")
                     }
+
                     ToolMode.RAG -> {
-                        viewModel.sendMessage(text, enableSearch = false, enableRag = true)
+                        viewModel.sendMessage(text, enableRag = true)
                         Log.d("MainAc", "Depp research activated ")
                     }
                 }
@@ -267,13 +284,25 @@ class CloudChatActivity : AppCompatActivity() {
     private fun setActiveTool(tool: ToolMode) {
         activeTool = tool
 
-        if (tool == ToolMode.NONE) {
-            toolChipContainer.visibility = View.GONE
-            input.hint = "Message..."
-        } else {
-            toolChipContainer.visibility = View.VISIBLE
-            toolChip.text = "${tool.icon} ${tool.label}  ✕"
-            input.hint = "${tool.label}..."
+        if (tool == ToolMode.NONE) input.hint = "Message..."
+        else input.hint = "${tool.label}"
+        renderToolChip()
+        }
+    private fun renderToolChip() {
+        val searching = agentSearchQuery
+        when {
+            searching != null -> {
+                toolChipContainer.visibility = View.VISIBLE
+                val display = if (searching.length > 40) searching.take(40) + "..." else searching
+                toolChip.text = "\uD83D\uDD0D Searching: $display"
+            }
+            activeTool != ToolMode.NONE -> {
+                toolChipContainer.visibility = View.VISIBLE
+                toolChip.text = "${activeTool.icon} ${activeTool.label}  ✕"
+            }
+            else -> {
+                toolChipContainer.visibility = View.GONE
+            }
         }
     }
     // ── Save / Load / Delete (server-backed) ─────────────────────────

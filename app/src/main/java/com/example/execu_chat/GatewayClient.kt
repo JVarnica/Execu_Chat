@@ -158,11 +158,10 @@ class GatewayClient(
     fun streamChat(
         sessionId: String,
         message: String,
-        enableSearch: Boolean,
         enableRag: Boolean,
         model: String,
         temperature: Double,
-        maxTokens: Int,
+        onSearchStatus: ((query: String?) -> Unit)? = null,
         onDelta: (String) -> Unit,
         onDone: () -> Unit,
         onError: (Throwable) -> Unit
@@ -172,11 +171,9 @@ class GatewayClient(
         val payload = JSONObject().apply {
             put("session_id", sessionId)
             put("message", message)
-            put("enable_search", enableSearch)
             put("enable_rag", enableRag)
             put("model", model)
             put("temperature", temperature)
-            put("max_tokens", maxTokens)
         }.toString()
 
         val req = Request.Builder()
@@ -188,13 +185,26 @@ class GatewayClient(
 
         val listener = object : EventSourceListener() {
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                // gateway forwards OpenAI style: data: {...} and data: [DONE]
+                // Handle agentic events
+                when (type) {
+                    "tool_use" -> {
+                        runCatching {
+                            val query = JSONObject(data).optString("query", "")
+                            onSearchStatus?.invoke(query)
+                        }
+                        return
+                    }
+                    "tool_result" -> {
+                        onSearchStatus?.invoke(null) // search done clear indicator
+                        return
+                    }
+                }
+                // standard  OpenAI SSE delta
                 if (data == "[DONE]") {
                     onDone()
                     eventSource.cancel()
                     return
                 }
-
                 try {
                     val obj = JSONObject(data)
                     val choices = obj.optJSONArray("choices") ?: return

@@ -115,7 +115,6 @@ class VllmClient(
                     errorRef.set(e)
                     eventSource.cancel()
                     latch.countDown()
-
                 }
             }
 
