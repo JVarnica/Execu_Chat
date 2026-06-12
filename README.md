@@ -92,9 +92,9 @@ using FastAPI with jwt token for user authentication. There are 9 containers
  
 | Component | Repo |
 |---|---|
-| Android app (this repo) | [Execu_Chat](https://github.com/JVarnica/Execu_Chat) & [Hub](https://jvarnica.github.io/_projects/execuchat.md)
-| Backend server | [vllm-server](https://github.com/JVarnica/vllm-server) & [server hub](https://jvarnica.github.io/_projects/python-server.md)
-| Deep research agent | [research-agent](https://github.com/JVarnica/research-agent) & [research-agent](https://jvarnica.github.io/_projects/research-agent.md)
+| Android app (this repo) | [Execu_Chat](https://github.com/JVarnica/Execu_Chat) & [Hub](https://jvarnica.github.io/_projects/execuchat/)
+| Backend server | [vllm-server](https://github.com/JVarnica/vllm-server) & [server hub](https://jvarnica.github.io/_projects/python-server/)
+| Deep research agent | [research-agent](https://github.com/JVarnica/research-agent) & [research-agent](https://jvarnica.github.io/_projects/research-agent/)
 
 
 
